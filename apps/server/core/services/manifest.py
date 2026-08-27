@@ -120,8 +120,10 @@ def build_manifest(channel: Channel, revision_number: int) -> dict[str, Any]:
 
         if item.item_type == PlaylistItem.ItemType.ASSET:
             asset = item.asset
-            if not asset or not asset.enabled or asset.deleted_at:
-                problems.append(f"Элемент {item.id}: контент отключён или удалён")
+            if not asset:
+                problems.append(f"Элемент {item.id}: контент не выбран")
+                continue
+            if not asset.enabled or asset.deleted_at:
                 continue
             if asset.status != Asset.Status.READY:
                 problems.append(f"{asset.name}: контент ещё не готов")
@@ -134,8 +136,10 @@ def build_manifest(channel: Channel, revision_number: int) -> dict[str, Any]:
             entry["asset"] = serialize_asset(asset)
         else:
             scene = item.scene
-            if not scene or not scene.enabled:
-                problems.append(f"Элемент {item.id}: сцена отключена")
+            if not scene:
+                problems.append(f"Элемент {item.id}: сцена не выбрана")
+                continue
+            if not scene.enabled:
                 continue
             entry["scene"] = serialize_scene(scene, channel)
         items.append(entry)

@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Изменить {{ kind|lower }}{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">{{ kind }}</p><h1>{{ object }}</h1></div></header>
+<section class="panel form-panel">
+  <form method="post" class="stack-form edit-form">{% csrf_token %}{{ form.as_p }}
+    <div class="modal-actions"><a class="button secondary" href="javascript:history.back()">Отмена</a><button class="button primary">Сохранить</button></div>
+  </form>
+</section>
+{% endblock %}

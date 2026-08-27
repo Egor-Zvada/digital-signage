@@ -15,7 +15,16 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .forms import AssetForm, ChannelForm, PlaylistForm, PlaylistItemForm, ScreenForm, SloganForm
+from .forms import (
+    AssetEditForm,
+    AssetForm,
+    ChannelForm,
+    PlaylistForm,
+    PlaylistItemForm,
+    SceneForm,
+    ScreenForm,
+    SloganForm,
+)
 from .models import (
     Asset,
     AuditEvent,
@@ -23,6 +32,7 @@ from .models import (
     PlayerCommand,
     Playlist,
     PlaylistItem,
+    Scene,
     Screen,
     Slogan,
     SloganSet,
@@ -97,7 +107,41 @@ def asset_list(request: HttpRequest) -> HttpResponse:
     kind = request.GET.get("kind", "")
     if kind:
         assets = assets.filter(kind=kind)
+    ordering = {
+        "name": ("name",),
+        "oldest": ("created_at",),
+        "type": ("kind", "name"),
+        "newest": ("-created_at",),
+    }.get(request.GET.get("sort", "newest"), ("-created_at",))
+    assets = assets.order_by(*ordering)
     return render(request, "core/assets.html", {"assets": assets, "form": form})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def asset_edit(request: HttpRequest, asset_id) -> HttpResponse:
+    asset = get_object_or_404(Asset, pk=asset_id, deleted_at__isnull=True)
+    old_source = asset.source_url
+    old_mode = asset.website_mode
+    form = AssetEditForm(request.POST or None, instance=asset)
+    if request.method == "POST" and form.is_valid():
+        asset = form.save()
+        website_changed = asset.kind == Asset.Kind.WEBSITE and (
+            asset.source_url != old_source or asset.website_mode != old_mode
+        )
+        if website_changed:
+            asset.status = Asset.Status.PROCESSING
+            asset.error_message = ""
+            asset.save(update_fields=["status", "error_message", "updated_at"])
+            WorkerJob.objects.create(
+                job_type=WorkerJob.JobType.PROBE_ASSET, payload={"assetId": str(asset.id)}
+            )
+        _audit(request, "asset.updated", asset)
+        messages.success(request, "Контент изменён. Опубликуйте канал, когда будете готовы.")
+        return redirect("assets")
+    return render(
+        request, "core/edit_form.html", {"form": form, "object": asset, "kind": "Контент"}
+    )
 
 
 @login_required
@@ -159,6 +203,23 @@ def playlist_edit(request: HttpRequest, playlist_id: int) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
+def playlist_settings(request: HttpRequest, playlist_id: int) -> HttpResponse:
+    playlist = get_object_or_404(Playlist, pk=playlist_id)
+    form = PlaylistForm(request.POST or None, instance=playlist)
+    if request.method == "POST" and form.is_valid():
+        playlist = form.save()
+        _audit(request, "playlist.updated", playlist)
+        messages.success(request, "Плейлист изменён.")
+        return redirect("playlist_edit", playlist_id=playlist.id)
+    return render(
+        request,
+        "core/edit_form.html",
+        {"form": form, "object": playlist, "kind": "Плейлист"},
+    )
+
+
+@login_required
 @require_POST
 def playlist_reorder(request: HttpRequest, playlist_id: int) -> JsonResponse:
     playlist = get_object_or_404(Playlist, pk=playlist_id)
@@ -192,6 +253,23 @@ def playlist_item_toggle(request: HttpRequest, item_id: int) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
+def playlist_item_edit(request: HttpRequest, item_id: int) -> HttpResponse:
+    item = get_object_or_404(PlaylistItem, pk=item_id)
+    form = PlaylistItemForm(request.POST or None, instance=item)
+    if request.method == "POST" and form.is_valid():
+        item = form.save()
+        _audit(request, "playlist.item_updated", item, {"playlistId": item.playlist_id})
+        messages.success(request, "Параметры показа изменены. Опубликуйте канал для применения.")
+        return redirect("playlist_edit", playlist_id=item.playlist_id)
+    return render(
+        request,
+        "core/edit_form.html",
+        {"form": form, "object": item, "kind": "Элемент плейлиста"},
+    )
+
+
+@login_required
 @require_POST
 def playlist_item_delete(request: HttpRequest, item_id: int) -> HttpResponse:
     item = get_object_or_404(PlaylistItem, pk=item_id)
@@ -212,6 +290,21 @@ def channel_list(request: HttpRequest) -> HttpResponse:
         return redirect("channels")
     channels = Channel.objects.select_related("playlist", "published_revision").order_by("name")
     return render(request, "core/channels.html", {"channels": channels, "form": form})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def channel_edit(request: HttpRequest, channel_id: int) -> HttpResponse:
+    channel = get_object_or_404(Channel, pk=channel_id)
+    form = ChannelForm(request.POST or None, instance=channel)
+    if request.method == "POST" and form.is_valid():
+        channel = form.save()
+        _audit(request, "channel.updated", channel)
+        messages.success(request, "Канал изменён. Для экранов изменения появятся после публикации.")
+        return redirect("channels")
+    return render(
+        request, "core/edit_form.html", {"form": form, "object": channel, "kind": "Канал"}
+    )
 
 
 @login_required
@@ -252,6 +345,21 @@ def screen_list(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
+def screen_edit(request: HttpRequest, screen_id) -> HttpResponse:
+    screen = get_object_or_404(Screen, pk=screen_id)
+    form = ScreenForm(request.POST or None, instance=screen)
+    if request.method == "POST" and form.is_valid():
+        screen = form.save()
+        _audit(request, "screen.updated", screen)
+        messages.success(request, "Экран изменён. Его постоянная ссылка осталась прежней.")
+        return redirect("screens")
+    return render(
+        request, "core/edit_form.html", {"form": form, "object": screen, "kind": "Экран"}
+    )
+
+
+@login_required
 @require_POST
 def screen_command(request: HttpRequest, screen_id) -> HttpResponse:
     screen = get_object_or_404(Screen, pk=screen_id)
@@ -261,7 +369,11 @@ def screen_command(request: HttpRequest, screen_id) -> HttpResponse:
         return redirect("screens")
     payload = {}
     if command == PlayerCommand.CommandType.VOLUME:
-        payload["value"] = max(0, min(100, int(request.POST.get("value", "100"))))
+        try:
+            requested_volume = int(request.POST.get("value", "100"))
+        except ValueError:
+            requested_volume = 100
+        payload["value"] = max(0, min(100, requested_volume))
     PlayerCommand.objects.create(
         screen=screen,
         command=command,
@@ -294,6 +406,84 @@ def slogans(request: HttpRequest) -> HttpResponse:
     )
 
 
+@login_required
+@require_http_methods(["GET", "POST"])
+def slogan_edit(request: HttpRequest, slogan_id: int) -> HttpResponse:
+    slogan = get_object_or_404(Slogan, pk=slogan_id)
+    form = SloganForm(request.POST or None, instance=slogan)
+    if request.method == "POST" and form.is_valid():
+        slogan = form.save()
+        _audit(request, "slogan.updated", slogan)
+        messages.success(request, "Фраза изменена. Опубликуйте канал для применения.")
+        return redirect("slogans")
+    return render(
+        request, "core/edit_form.html", {"form": form, "object": slogan, "kind": "Фраза"}
+    )
+
+
+@login_required
+@require_POST
+def slogan_toggle(request: HttpRequest, slogan_id: int) -> HttpResponse:
+    slogan = get_object_or_404(Slogan, pk=slogan_id)
+    slogan.enabled = not slogan.enabled
+    slogan.save(update_fields=["enabled", "updated_at"])
+    _audit(request, "slogan.toggled", slogan, {"enabled": slogan.enabled})
+    return redirect("slogans")
+
+
+@login_required
+@require_POST
+def slogan_move(request: HttpRequest, slogan_id: int) -> HttpResponse:
+    slogan = get_object_or_404(Slogan, pk=slogan_id)
+    direction = request.POST.get("direction")
+    queryset = slogan.slogan_set.slogans.all()
+    neighbour = (
+        queryset.filter(position__lt=slogan.position).order_by("-position", "-id").first()
+        if direction == "up"
+        else queryset.filter(position__gt=slogan.position).order_by("position", "id").first()
+    )
+    if neighbour:
+        with transaction.atomic():
+            current_position = slogan.position
+            slogan.position = neighbour.position
+            neighbour.position = current_position
+            slogan.save(update_fields=["position", "updated_at"])
+            neighbour.save(update_fields=["position", "updated_at"])
+        _audit(request, "slogan.reordered", slogan, {"direction": direction})
+    return redirect("slogans")
+
+
+@login_required
+@require_POST
+def slogan_delete(request: HttpRequest, slogan_id: int) -> HttpResponse:
+    slogan = get_object_or_404(Slogan, pk=slogan_id)
+    _audit(request, "slogan.deleted", slogan)
+    slogan.delete()
+    messages.success(request, "Фраза удалена. Опубликуйте канал для применения.")
+    return redirect("slogans")
+
+
+@login_required
+def scene_list(request: HttpRequest) -> HttpResponse:
+    scenes = Scene.objects.select_related("theme", "slogan_set", "weather_source").order_by("name")
+    return render(request, "core/scenes.html", {"scenes": scenes})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def scene_edit(request: HttpRequest, scene_id: int) -> HttpResponse:
+    scene = get_object_or_404(Scene, pk=scene_id)
+    form = SceneForm(request.POST or None, instance=scene)
+    if request.method == "POST" and form.is_valid():
+        scene = form.save()
+        _audit(request, "scene.updated", scene)
+        messages.success(request, "Сцена изменена. Опубликуйте канал для применения.")
+        return redirect("scenes")
+    return render(
+        request, "core/edit_form.html", {"form": form, "object": scene, "kind": "Сцена"}
+    )
+
+
 @screen_token_required
 @require_GET
 def player(request: HttpRequest, screen_id, token: str) -> HttpResponse:
@@ -303,6 +493,18 @@ def player(request: HttpRequest, screen_id, token: str) -> HttpResponse:
         {"screen": request.signage_screen, "screen_id": screen_id, "screen_token": token},
     )
     response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@screen_token_required
+@require_GET
+def player_service_worker(request: HttpRequest, screen_id, token: str) -> HttpResponse:
+    response = render(request, "player/service-worker.js", content_type="text/javascript")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Service-Worker-Allowed"] = reverse(
+        "player", kwargs={"screen_id": screen_id, "token": token}
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
@@ -375,7 +577,9 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
     )
     if not allowed:
         raise Http404
-    asset = get_object_or_404(Asset, pk=asset_id, enabled=True, deleted_at__isnull=True)
+    # Опубликованная ревизия неизменяема: отключение элемента применяется только
+    # после следующей публикации, а текущая ревизия продолжает работать без обрыва.
+    asset = get_object_or_404(Asset, pk=asset_id)
     selected_file = asset.file
     if asset.kind == Asset.Kind.WEBSITE and asset.website_mode == Asset.WebsiteMode.SNAPSHOT:
         snapshot_name = asset.metadata.get("snapshotPath", "")

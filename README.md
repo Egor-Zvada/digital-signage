@@ -1,7 +1,8 @@
 # Digital Signage — ОГАУ ДО «СШ ВВЕ»
 
-Локальная система цифровых экранов для Raspberry Pi 5. Сервер работает в одном
-непривилегированном Debian 13 LXC на Proxmox VE без Docker.
+Локальная система цифровых экранов для любого современного браузера, включая
+Raspberry Pi 5. Сервер работает в одном непривилегированном Debian 13 LXC на
+Proxmox VE без Docker.
 
 ## Возможности v1
 
@@ -24,9 +25,7 @@
 ```text
 apps/server/       Django API, панель управления и web-player
 apps/web/          статические ресурсы интерфейса и фирменная тема
-client/pi-agent/   локальный агент Raspberry Pi 5
 deploy/lxc/        установка и systemd-конфигурация сервера
-deploy/pi/         установка kiosk-клиента
 docs/              архитектура, эксплуатация и восстановление
 ```
 
@@ -36,13 +35,14 @@ docs/              архитектура, эксплуатация и восс�
 - Debian 13 LXC, `unprivileged: 1`;
 - PostgreSQL 17, Nginx, FFmpeg, Chromium;
 - Python 3.13 и Django 5.2 LTS;
-- Raspberry Pi OS 64-bit и Raspberry Pi 5.
+- любой Chromium/Chrome/Edge с Service Worker; Raspberry Pi OS 64-bit и Pi 5 поддерживаются.
 
 Файл `.env` и любые секреты никогда не добавляются в Git. Пример настроек будет
 находиться в `.env.example`.
 
 ## Статус
 
-Проект находится в активной разработке. Зафиксированный объём первой версии
-описан в [docs/product-spec-v1.md](docs/product-spec-v1.md).
-
+Установка сервера описана в [docs/operations.md](docs/operations.md), запуск любого
+браузера в режиме экрана — в [docs/browser-client.md](docs/browser-client.md).
+Зафиксированный объём первой версии находится в
+[docs/product-spec-v1.md](docs/product-spec-v1.md).

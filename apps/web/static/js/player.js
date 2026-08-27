@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.1.0-web';
+  const VERSION = '0.2.0-browser';
   const root = document.getElementById('signage-player');
   const stage = document.getElementById('stage');
   const empty = document.getElementById('empty-state');
@@ -21,6 +21,7 @@
   let forcedIndex = null;
   let globalMuted = false;
   let globalVolume = 1;
+  let manifestLoading = false;
 
   const now = () => Date.now() + serverOffsetMs;
   const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -127,7 +128,7 @@
     const asset = item.asset;
     if (asset.kind === 'image' || asset.websiteMode === 'snapshot') return `<article class="stage-item"><img class="${fitClass(item.fit)}" src="${esc(asset.mediaUrl)}" alt=""></article>`;
     if (asset.kind === 'video') return `<article class="stage-item"><video class="${fitClass(item.fit)}" src="${esc(asset.mediaUrl)}" playsinline preload="auto" ${item.muted || manifest.channel.muted ? 'muted' : ''}></video></article>`;
-    if (asset.kind === 'website') return `<article class="stage-item"><iframe class="website-frame" src="${esc(asset.url)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></article>`;
+    if (asset.kind === 'website') return `<article class="stage-item"><iframe class="website-frame" src="${esc(asset.url)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" referrerpolicy="no-referrer"></iframe></article>`;
     return `<article class="stage-item player-error"><strong>Неизвестный тип контента</strong></article>`;
   }
 
@@ -192,22 +193,46 @@
   }
 
   async function loadManifest() {
+    if (manifestLoading) return;
+    manifestLoading = true;
     try {
       const response = await fetch(manifestUrl, {cache:'no-store',headers:etag ? {'If-None-Match':etag} : {}});
-      if (response.status === 304) { connectionState.hidden = true; return; }
+      const offline = response.headers.get('X-Signage-Offline') === '1';
+      if (response.status === 304) { if (!offline) connectionState.hidden = true; return; }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const next = await response.json();
       etag = response.headers.get('ETag') || '';
-      if (next.serverTime) serverOffsetMs = Date.parse(next.serverTime) - Date.now();
+      if (next.serverTime && !offline) serverOffsetMs = Date.parse(next.serverTime) - Date.now();
       const changed = !manifest || next.revision !== manifest.revision;
       manifest = next;
-      connectionState.hidden = true;
-      lastError = '';
+      connectionState.hidden = !offline;
+      lastError = offline ? 'Нет связи с сервером · показ из кеша' : '';
       if (changed) { activeKey = ''; schedulePlayback(); }
     } catch (error) {
       connectionState.hidden = false;
       lastError = `Связь: ${error.message}`;
       if (!manifest) bootDetail.textContent = 'Сервер временно недоступен';
+    } finally {
+      manifestLoading = false;
+    }
+  }
+
+  async function prepareOfflineCache() {
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    try {
+      const workerUrl = new URL('player-sw.js', location.href);
+      const scope = new URL('./', location.href).pathname;
+      await navigator.serviceWorker.register(workerUrl, {scope});
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) {
+        await Promise.race([
+          new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true})),
+          new Promise((resolve) => setTimeout(resolve, 2000)),
+        ]);
+      }
+      if (navigator.storage?.persist) await navigator.storage.persist();
+    } catch (error) {
+      console.warn('Автономный кеш недоступен:', error);
     }
   }
 
@@ -239,7 +264,10 @@
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { activeKey=''; schedulePlayback(); } });
   window.addEventListener('online', loadManifest);
-  loadManifest().then(schedulePlayback);
+  navigator.serviceWorker?.addEventListener('message', (event) => {
+    if (event.data?.type === 'revision-ready') loadManifest();
+  });
+  prepareOfflineCache().then(loadManifest).then(schedulePlayback);
   setInterval(loadManifest, 30000);
   setInterval(heartbeat, 15000);
   heartbeat();

@@ -6,6 +6,7 @@
 <form method="get" class="filter-bar">
   <input name="q" value="{{ request.GET.q }}" placeholder="Поиск по названию">
   <select name="kind"><option value="">Все типы</option><option value="image" {% if request.GET.kind == 'image' %}selected{% endif %}>Фото</option><option value="video" {% if request.GET.kind == 'video' %}selected{% endif %}>Видео</option><option value="website" {% if request.GET.kind == 'website' %}selected{% endif %}>Сайт</option></select>
+  <select name="sort"><option value="newest">Сначала новые</option><option value="name" {% if request.GET.sort == 'name' %}selected{% endif %}>По названию</option><option value="type" {% if request.GET.sort == 'type' %}selected{% endif %}>По типу</option><option value="oldest" {% if request.GET.sort == 'oldest' %}selected{% endif %}>Сначала старые</option></select>
   <button class="button secondary">Найти</button>
 </form>
 
@@ -20,6 +21,7 @@
     </div>
     <div class="asset-body"><h3>{{ asset.name }}</h3><p>{{ asset.source_url|default:asset.file.name|truncatechars:42 }}</p><div class="asset-meta"><span class="badge {{ asset.status }}">{{ asset.get_status_display }}</span>{% if asset.width %}<span>{{ asset.width }}×{{ asset.height }}</span>{% endif %}</div></div>
     <div class="asset-actions">
+      <a class="button ghost" href="{% url 'asset_edit' asset.id %}">Изменить</a>
       <form method="post" action="{% url 'asset_toggle' asset.id %}">{% csrf_token %}<button class="button ghost">{% if asset.enabled %}Выключить{% else %}Включить{% endif %}</button></form>
       <form method="post" action="{% url 'asset_delete' asset.id %}" data-confirm="Переместить контент в корзину?">{% csrf_token %}<button class="button danger ghost">Удалить</button></form>
     </div>
@@ -29,4 +31,3 @@
 
 <dialog id="asset-dialog" class="modal" {% if form.errors %}open{% endif %}><form method="post" enctype="multipart/form-data" class="stack-form">{% csrf_token %}<div class="modal-heading"><div><p class="eyebrow">Новый элемент</p><h2>Добавить контент</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Закрыть">×</button></div>{{ form.as_p }}<div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Добавить</button></div></form></dialog>
 {% endblock %}
-
