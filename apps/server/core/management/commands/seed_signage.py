@@ -80,7 +80,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
-        theme, _ = BrandTheme.objects.update_or_create(
+        theme, _ = BrandTheme.objects.get_or_create(
             name="Круг движения",
             defaults={
                 "short_name": "ОГАУ ДО «СШ ВВЕ»",
@@ -108,13 +108,13 @@ class Command(BaseCommand):
             },
         )
         for index, text in enumerate(SLOGANS, start=1):
-            Slogan.objects.update_or_create(
+            Slogan.objects.get_or_create(
                 slogan_set=slogan_set,
                 text=text,
                 defaults={"enabled": True, "position": index * 10},
             )
 
-        weather, _ = WeatherSource.objects.update_or_create(
+        weather, _ = WeatherSource.objects.get_or_create(
             name="Южно-Сахалинск",
             defaults={
                 "provider": "open_meteo",
@@ -141,7 +141,7 @@ class Command(BaseCommand):
             defaults={"description": "Фирменные сцены, объявления и медиаконтент"},
         )
         for index, (name, scene_type, duration, config) in enumerate(SCENES, start=1):
-            scene, _ = Scene.objects.update_or_create(
+            scene, _ = Scene.objects.get_or_create(
                 name=name,
                 defaults={
                     "scene_type": scene_type,
@@ -152,7 +152,7 @@ class Command(BaseCommand):
                     "config": config,
                 },
             )
-            PlaylistItem.objects.update_or_create(
+            PlaylistItem.objects.get_or_create(
                 playlist=playlist,
                 scene=scene,
                 defaults={
@@ -166,7 +166,7 @@ class Command(BaseCommand):
             )
 
         sync_group, _ = SyncGroup.objects.get_or_create(name="Основная группа")
-        channel, _ = Channel.objects.update_or_create(
+        channel, _ = Channel.objects.get_or_create(
             slug="main",
             defaults={
                 "name": "Основной канал",

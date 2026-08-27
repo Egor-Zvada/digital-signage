@@ -27,6 +27,30 @@ def test_seed_creates_brand_content(seeded):
 
 
 @pytest.mark.django_db
+def test_repeated_seed_preserves_operator_changes(seeded):
+    slogan = SloganSet.objects.get(name="Основные фразы").slogans.first()
+    slogan.enabled = False
+    slogan.position = 777
+    slogan.save()
+    scene = Scene.objects.get(scene_type=Scene.SceneType.ANNOUNCEMENT)
+    scene.config = {"title": "Сообщение оператора"}
+    scene.save()
+    item = seeded.playlist.items.get(scene=scene)
+    item.duration_seconds = 42
+    item.save()
+
+    call_command("seed_signage", verbosity=0)
+
+    slogan.refresh_from_db()
+    scene.refresh_from_db()
+    item.refresh_from_db()
+    assert not slogan.enabled
+    assert slogan.position == 777
+    assert scene.config["title"] == "Сообщение оператора"
+    assert item.duration_seconds == 42
+
+
+@pytest.mark.django_db
 def test_publish_creates_immutable_revision(seeded):
     first = publish_channel(seeded)
     second = publish_channel(seeded)
