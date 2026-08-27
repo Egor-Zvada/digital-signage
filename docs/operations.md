@@ -9,13 +9,17 @@ git clone https://github.com/Egor-Zvada/digital-signage.git /root/digital-signag
 bash /root/digital-signage/deploy/lxc/install.sh
 ```
 
-Установщик создаёт PostgreSQL, системного пользователя, каталоги, TLS-сертификат,
-версионный релиз, службы systemd и первого администратора. Начальный пароль хранится
-в `/root/signage-initial-admin.txt` и должен быть удалён после смены пароля.
+Установщик создаёт PostgreSQL, системного пользователя, каталоги, начальный
+локальный TLS-сертификат, версионный релиз, службы systemd и первого администратора.
+Начальный пароль хранится в `/root/signage-initial-admin.txt` и должен быть удалён
+после смены пароля.
 
-Корневой сертификат локального центра сертификации доступен до перенаправления по
-адресу `http://signage.vve.local/signage-ca.crt`. Его нужно установить в доверенные
-на компьютере администратора и Raspberry Pi.
+Начальный публичный сертификат Signage CA доступен до перенаправления по адресу
+`http://signage.vve.local/signage-ca.crt`. Для production рекомендуется заменить
+его серверным сертификатом существующего Microsoft CA. Этот CA нужен приложению
+только для HTTPS; mTLS и клиентские сертификаты не используются. Состав файлов,
+проверки и порядок перехода описаны в
+[полном русском руководстве](user-guide-ru.md#11-собственный-ca-и-microsoft-ca).
 
 ## Проверка
 
@@ -51,4 +55,3 @@ systemctl start signage-backup.service
 Повторный запуск актуального `deploy/lxc/install.sh` создаёт новый каталог в
 `/opt/signage/releases`, выполняет миграции и атомарно меняет `/opt/signage/current`.
 Перед обновлением рекомендуется snapshot LXC и отдельный `pg_dump`.
-
