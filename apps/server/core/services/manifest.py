@@ -187,7 +187,7 @@ def build_manifest(channel: Channel, revision_number: int) -> dict[str, Any]:
 @transaction.atomic
 def publish_channel(channel: Channel, user=None) -> PublishedRevision:
     channel = (
-        Channel.objects.select_for_update()
+        Channel.objects.select_for_update(of=("self",))
         .select_related("playlist", "theme", "slogan_set", "weather_source")
         .get(pk=channel.pk)
     )
