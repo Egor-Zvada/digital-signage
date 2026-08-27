@@ -81,7 +81,7 @@ else
     git --git-dir="$repo_dir" remote update --prune
 fi
 
-commit=$(git --git-dir="$repo_dir" rev-parse origin/main)
+commit=$(git --git-dir="$repo_dir" rev-parse refs/heads/main)
 release_id="$(date +%Y%m%d%H%M%S)-${commit:0:10}"
 release_dir="$release_root/$release_id"
 install -d -o signage -g signage -m 0755 "$release_dir"
@@ -139,4 +139,3 @@ echo
 echo "Digital Signage установлен: https://signage.vve.local/"
 echo "Корневой сертификат: http://signage.vve.local/signage-ca.crt"
 echo "Начальные данные администратора: /root/signage-initial-admin.txt"
-
