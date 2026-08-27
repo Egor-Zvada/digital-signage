@@ -133,8 +133,20 @@ if ! runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python
     chmod 0600 /root/signage-initial-admin.txt
 fi
 
-curl --fail --silent --show-error --cacert "$tls_dir/ca.crt" \
-    --resolve signage.vve.local:443:127.0.0.1 https://signage.vve.local/healthz
+health_ok=0
+for _ in $(seq 1 30); do
+    if curl --fail --silent --show-error --cacert "$tls_dir/ca.crt" \
+        --resolve signage.vve.local:443:127.0.0.1 https://signage.vve.local/healthz; then
+        health_ok=1
+        break
+    fi
+    sleep 1
+done
+if [[ $health_ok -ne 1 ]]; then
+    echo "Веб-сервис не ответил за 30 секунд." >&2
+    systemctl --no-pager --full status signage-web nginx >&2 || true
+    exit 1
+fi
 echo
 echo "Digital Signage установлен: https://signage.vve.local/"
 echo "Корневой сертификат: http://signage.vve.local/signage-ca.crt"
