@@ -1,0 +1,36 @@
+[Unit]
+Description=VVE Digital Signage web service
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=signage
+Group=www-data
+WorkingDirectory=/opt/signage/current/apps/server
+EnvironmentFile=/etc/signage/signage.env
+RuntimeDirectory=signage
+RuntimeDirectoryMode=0750
+UMask=0027
+ExecStart=/opt/signage/current/.venv/bin/uvicorn config.asgi:application --uds /run/signage/signage.sock --workers 2 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/run/signage /srv/signage
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
+

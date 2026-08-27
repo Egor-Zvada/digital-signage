@@ -1,0 +1,5 @@
+basicConstraints=CA:FALSE
+keyUsage=digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:signage.vve.local,IP:192.168.110.222
+

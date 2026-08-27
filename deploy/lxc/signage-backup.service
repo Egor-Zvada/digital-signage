@@ -1,0 +1,17 @@
+[Unit]
+Description=VVE Digital Signage PostgreSQL backup
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=signage
+Group=signage
+UMask=0077
+ExecStart=/usr/local/sbin/signage-backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/signage/backups/postgres
+

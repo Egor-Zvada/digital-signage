@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily VVE Digital Signage PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 02:20:00 Asia/Sakhalin
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
+

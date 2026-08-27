@@ -1,0 +1,27 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход · Digital Signage</title>
+  <link rel="stylesheet" href="{% static 'css/admin.css' %}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <img src="{% static 'brand/school-logo.png' %}" alt="Логотип школы">
+    <p class="eyebrow">ОГАУ ДО «СШ ВВЕ»</p>
+    <h1>Управление экранами</h1>
+    <p class="muted">Войдите, чтобы управлять контентом и расписанием.</p>
+    {% if form.errors %}<div class="message error">Неверное имя пользователя или пароль.</div>{% endif %}
+    <form method="post" class="stack-form">
+      {% csrf_token %}
+      <label>Имя пользователя{{ form.username }}</label>
+      <label>Пароль{{ form.password }}</label>
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <button class="button primary" type="submit">Войти</button>
+    </form>
+  </main>
+</body>
+</html>
+

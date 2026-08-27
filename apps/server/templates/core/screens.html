@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block title %}Экраны{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Клиенты</p><h1>Экраны</h1></div><button class="button primary" data-dialog-open="screen-dialog">Добавить экран</button></header>
+{% if issued_url %}<section class="secret-banner"><strong>Ссылка создана. Скопируйте её сейчас:</strong><div><input id="issued-url" readonly value="{{ issued_url }}"><button class="button secondary" data-copy-target="issued-url">Копировать</button></div><small>Полный секрет больше не будет показан.</small></section>{% endif %}
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Экран</th><th>Канал</th><th>Состояние</th><th>Сейчас</th><th>Последняя связь</th><th>Управление</th></tr></thead><tbody>
+{% for screen in screens %}<tr><td><strong>{{ screen.name }}</strong><small class="block">{{ screen.id }}</small></td><td>{{ screen.channel.name }}</td><td><span class="badge {{ screen.status }}">{{ screen.get_status_display }}</span>{% if screen.last_error %}<small class="block error-text">{{ screen.last_error|truncatechars:60 }}</small>{% endif %}</td><td>{{ screen.current_item_key|default:'—' }}{% if screen.current_revision %}<small class="block">ревизия {{ screen.current_revision }}</small>{% endif %}</td><td>{{ screen.last_seen_at|date:'d.m.Y H:i:s'|default:'—' }}</td><td><div class="command-row"><form method="post" action="{% url 'screen_command' screen.id %}">{% csrf_token %}<button class="icon-button" name="command" value="previous" title="Предыдущий">‹</button><button class="icon-button" name="command" value="next" title="Следующий">›</button><button class="icon-button" name="command" value="reload" title="Перезагрузить">↻</button><button class="icon-button" name="command" value="mute" title="Выключить звук">⌁</button></form></div></td></tr>
+{% empty %}<tr><td colspan="6" class="empty">Экраны ещё не добавлены.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<dialog id="screen-dialog" class="modal" {% if form.errors %}open{% endif %}><form method="post" class="stack-form">{% csrf_token %}<div class="modal-heading"><h2>Новый экран</h2><button type="button" class="icon-button" data-dialog-close>×</button></div>{{ form.as_p }}<div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Создать ссылку</button></div></form></dialog>
+{% endblock %}
+

@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Плейлисты{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Очереди показа</p><h1>Плейлисты</h1></div><button class="button primary" data-dialog-open="playlist-dialog">Создать плейлист</button></header>
+<section class="list-grid">
+{% for playlist in playlists %}<a class="list-card" href="{% url 'playlist_edit' playlist.id %}"><div><h2>{{ playlist.name }}</h2><p>{{ playlist.description|default:'Без описания' }}</p></div><span class="count-pill">{{ playlist.item_count }} элементов</span></a>
+{% empty %}<div class="empty-card"><strong>Плейлистов пока нет</strong><p>Создайте очередь и добавьте в неё контент.</p></div>{% endfor %}
+</section>
+<dialog id="playlist-dialog" class="modal"><form method="post" class="stack-form">{% csrf_token %}<div class="modal-heading"><h2>Новый плейлист</h2><button type="button" class="icon-button" data-dialog-close>×</button></div>{{ form.as_p }}<div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Создать</button></div></form></dialog>
+{% endblock %}
+

@@ -1,0 +1,28 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>{{ screen.name }}</title>
+  <link rel="stylesheet" href="{% static 'css/player.css' %}">
+</head>
+<body>
+  <main id="signage-player"
+        data-manifest-url="{% url 'player_manifest' screen_id screen_token %}"
+        data-heartbeat-url="{% url 'player_heartbeat' screen_id screen_token %}"
+        data-command-prefix="/display/{{ screen_id }}/{{ screen_token }}/commands/">
+    <section id="stage" class="stage" aria-live="off"></section>
+    <section id="empty-state" class="brand-scene identity-scene">
+      <div class="ambient-circle circle-one"></div><div class="ambient-circle circle-two"></div>
+      <header class="scene-header"><img src="{% static 'brand/school-logo.png' %}" alt=""><div><strong>ОГАУ ДО «СШ ВВЕ»</strong><span>Цифровой информационный экран</span></div></header>
+      <div class="identity-content"><p>Подготовка экрана</p><h1>Загружаем программу показа</h1><span id="boot-detail">Соединение с сервером…</span></div>
+    </section>
+    <div id="connection-state" class="connection-state" hidden>Нет связи с сервером · показ из кеша</div>
+  </main>
+  <script src="{% static 'js/player.js' %}" defer></script>
+</body>
+</html>
+

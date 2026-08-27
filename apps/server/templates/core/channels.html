@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Каналы{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Публикация</p><h1>Каналы</h1><p class="muted">Экран получает изменения только после публикации новой ревизии.</p></div><button class="button primary" data-dialog-open="channel-dialog">Создать канал</button></header>
+<section class="list-grid">
+{% for channel in channels %}<article class="list-card channel-card"><div><div class="title-row"><h2>{{ channel.name }}</h2>{% if channel.enabled %}<span class="badge ready">Работает</span>{% else %}<span class="badge">Выключен</span>{% endif %}</div><p>{{ channel.playlist.name }} · {{ channel.timezone_name }}</p><small>{% if channel.published_revision %}Опубликована ревизия {{ channel.published_revision.number }}{% else %}Ещё не публиковался{% endif %}</small></div><form method="post" action="{% url 'channel_publish' channel.id %}">{% csrf_token %}<button class="button primary">Опубликовать</button></form></article>
+{% empty %}<div class="empty-card"><strong>Каналов пока нет</strong><p>Сначала создайте плейлист, затем канал.</p></div>{% endfor %}
+</section>
+<dialog id="channel-dialog" class="modal wide" {% if form.errors %}open{% endif %}><form method="post" class="stack-form">{% csrf_token %}<div class="modal-heading"><h2>Новый канал</h2><button type="button" class="icon-button" data-dialog-close>×</button></div><div class="form-grid">{{ form.as_p }}</div><div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Создать</button></div></form></dialog>
+{% endblock %}
+

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+backup_dir=/srv/signage/backups/postgres
+timestamp=$(date +%Y%m%d-%H%M%S)
+install -d -m 0700 "$backup_dir"
+pg_dump --format=custom --file="$backup_dir/signage-$timestamp.dump" signage
+find "$backup_dir" -maxdepth 1 -type f -name 'signage-*.dump' -mtime +14 -delete
+

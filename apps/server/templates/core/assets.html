@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block title %}Контент{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Библиотека</p><h1>Контент</h1><p class="muted">Фото, видео и сайты сохраняются и могут использоваться повторно.</p></div><button class="button primary" data-dialog-open="asset-dialog">Добавить контент</button></header>
+
+<form method="get" class="filter-bar">
+  <input name="q" value="{{ request.GET.q }}" placeholder="Поиск по названию">
+  <select name="kind"><option value="">Все типы</option><option value="image" {% if request.GET.kind == 'image' %}selected{% endif %}>Фото</option><option value="video" {% if request.GET.kind == 'video' %}selected{% endif %}>Видео</option><option value="website" {% if request.GET.kind == 'website' %}selected{% endif %}>Сайт</option></select>
+  <button class="button secondary">Найти</button>
+</form>
+
+<section class="asset-grid">
+  {% for asset in assets %}
+  <article class="asset-card {% if not asset.enabled %}disabled{% endif %}">
+    <div class="asset-preview">
+      {% if asset.kind == 'image' and asset.file %}<img src="{{ asset.file.url }}" alt="">
+      {% elif asset.kind == 'video' %}<span class="preview-icon">▶</span>
+      {% else %}<span class="preview-icon">↗</span>{% endif %}
+      <span class="asset-kind">{{ asset.get_kind_display }}</span>
+    </div>
+    <div class="asset-body"><h3>{{ asset.name }}</h3><p>{{ asset.source_url|default:asset.file.name|truncatechars:42 }}</p><div class="asset-meta"><span class="badge {{ asset.status }}">{{ asset.get_status_display }}</span>{% if asset.width %}<span>{{ asset.width }}×{{ asset.height }}</span>{% endif %}</div></div>
+    <div class="asset-actions">
+      <form method="post" action="{% url 'asset_toggle' asset.id %}">{% csrf_token %}<button class="button ghost">{% if asset.enabled %}Выключить{% else %}Включить{% endif %}</button></form>
+      <form method="post" action="{% url 'asset_delete' asset.id %}" data-confirm="Переместить контент в корзину?">{% csrf_token %}<button class="button danger ghost">Удалить</button></form>
+    </div>
+  </article>
+  {% empty %}<div class="empty-card"><strong>Библиотека пуста</strong><p>Добавьте первое фото, видео или сайт.</p></div>{% endfor %}
+</section>
+
+<dialog id="asset-dialog" class="modal" {% if form.errors %}open{% endif %}><form method="post" enctype="multipart/form-data" class="stack-form">{% csrf_token %}<div class="modal-heading"><div><p class="eyebrow">Новый элемент</p><h2>Добавить контент</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Закрыть">×</button></div>{{ form.as_p }}<div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Добавить</button></div></form></dialog>
+{% endblock %}
+

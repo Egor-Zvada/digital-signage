@@ -1,0 +1,45 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}Digital Signage{% endblock %} · {{ brand_short_name }}</title>
+  <link rel="stylesheet" href="{% static 'css/admin.css' %}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="{% url 'dashboard' %}">
+        <img src="{% static 'brand/school-logo.png' %}" alt="Логотип школы">
+        <span><strong>Digital Signage</strong><small>{{ brand_short_name }}</small></span>
+      </a>
+      <nav aria-label="Основная навигация">
+        <a href="{% url 'dashboard' %}" class="{% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">Обзор</a>
+        <a href="{% url 'assets' %}" class="{% if request.resolver_match.url_name == 'assets' %}active{% endif %}">Контент</a>
+        <a href="{% url 'playlists' %}" class="{% if 'playlist' in request.resolver_match.url_name %}active{% endif %}">Плейлисты</a>
+        <a href="{% url 'channels' %}" class="{% if request.resolver_match.url_name == 'channels' %}active{% endif %}">Каналы</a>
+        <a href="{% url 'screens' %}" class="{% if request.resolver_match.url_name == 'screens' %}active{% endif %}">Экраны</a>
+        <a href="{% url 'slogans' %}" class="{% if request.resolver_match.url_name == 'slogans' %}active{% endif %}">Фразы</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span>{{ request.user.get_username }}</span>
+        <form action="{% url 'logout' %}" method="post">{% csrf_token %}<button class="link-button">Выйти</button></form>
+      </div>
+    </aside>
+    <main class="main-content">
+      {% if messages %}
+        <div class="messages" aria-live="polite">
+          {% for message in messages %}<div class="message {{ message.tags }}">{{ message }}</div>{% endfor %}
+        </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{% static 'js/admin.js' %}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+

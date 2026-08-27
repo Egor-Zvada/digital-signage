@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Обзор{% endblock %}
+{% block content %}
+<header class="page-header">
+  <div><p class="eyebrow">Система работает</p><h1>Обзор экранов</h1></div>
+  <div class="status-chip"><span></span> {{ screens_online }} из {{ screens_count }} в сети</div>
+</header>
+
+<section class="metrics">
+  <a href="{% url 'assets' %}" class="metric"><span>Контент</span><strong>{{ assets_count }}</strong><small>файлов и сайтов</small></a>
+  <a href="{% url 'playlists' %}" class="metric"><span>Плейлисты</span><strong>{{ playlists_count }}</strong><small>очередей показа</small></a>
+  <a href="{% url 'channels' %}" class="metric"><span>Каналы</span><strong>{{ channels_count }}</strong><small>программ вещания</small></a>
+  <a href="{% url 'screens' %}" class="metric"><span>Экраны</span><strong>{{ screens_count }}</strong><small>{{ screens_online }} подключено</small></a>
+</section>
+
+<div class="two-columns">
+  <section class="panel">
+    <div class="panel-heading"><div><p class="eyebrow">Состояние</p><h2>Последние экраны</h2></div><a href="{% url 'screens' %}">Все экраны</a></div>
+    <div class="table-wrap"><table><thead><tr><th>Экран</th><th>Канал</th><th>Состояние</th><th>Последняя связь</th></tr></thead><tbody>
+      {% for screen in screens %}<tr><td><strong>{{ screen.name }}</strong></td><td>{{ screen.channel.name }}</td><td><span class="badge {{ screen.status }}">{{ screen.get_status_display }}</span></td><td>{{ screen.last_seen_at|date:'d.m.Y H:i:s'|default:'—' }}</td></tr>
+      {% empty %}<tr><td colspan="4" class="empty">Экраны ещё не созданы.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><div><p class="eyebrow">Журнал</p><h2>Последние действия</h2></div></div>
+    <div class="event-list">
+      {% for event in recent_events %}<article><span class="event-dot"></span><div><strong>{{ event.action }}</strong><p>{{ event.object_type }} {{ event.object_id }}</p><small>{{ event.created_at|date:'d.m.Y H:i:s' }} · {{ event.actor|default:'система' }}</small></div></article>
+      {% empty %}<p class="empty">Журнал пока пуст.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}
+
