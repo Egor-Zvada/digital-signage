@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import PurePosixPath
 
 from django.conf import settings
 from django.contrib import messages
@@ -571,16 +572,19 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
     revision = screen.channel.published_revision
     if not revision:
         raise Http404
-    allowed = any(
-        str(item.get("asset", {}).get("id")) == str(asset_id)
-        for item in revision.manifest.get("items", [])
+    published_asset = next(
+        (
+            item.get("asset", {})
+            for item in revision.manifest.get("items", [])
+            if str(item.get("asset", {}).get("id")) == str(asset_id)
+        ),
+        None,
     )
-    if not allowed:
+    if not published_asset:
         raise Http404
     # Опубликованная ревизия неизменяема: отключение элемента применяется только
     # после следующей публикации, а текущая ревизия продолжает работать без обрыва.
     asset = get_object_or_404(Asset, pk=asset_id)
-    selected_file = asset.file
     if asset.kind == Asset.Kind.WEBSITE and asset.website_mode == Asset.WebsiteMode.SNAPSHOT:
         snapshot_name = asset.metadata.get("snapshotPath", "")
         if not snapshot_name:
@@ -589,16 +593,22 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
         if not snapshot_path.is_file():
             raise Http404
         return FileResponse(snapshot_path.open("rb"), content_type="image/png")
-    if not selected_file:
+    media_name = published_asset.get("mediaPath") or (asset.file.name if asset.file else "")
+    relative_path = PurePosixPath(str(media_name))
+    if not media_name or relative_path.is_absolute() or ".." in relative_path.parts:
         raise Http404
+    selected_path = settings.MEDIA_ROOT.joinpath(*relative_path.parts)
+    if not selected_path.is_file():
+        raise Http404
+    content_type = published_asset.get("mimeType") or asset.mime_type or "application/octet-stream"
     if settings.DEBUG:
-        return FileResponse(selected_file.open("rb"), content_type=asset.mime_type or None)
-    response = HttpResponse(content_type=asset.mime_type or "application/octet-stream")
-    response.headers["X-Accel-Redirect"] = f"/_protected_media/{selected_file.name}"
+        return FileResponse(selected_path.open("rb"), content_type=content_type)
+    response = HttpResponse(content_type=content_type)
+    response.headers["X-Accel-Redirect"] = f"/_protected_media/{relative_path.as_posix()}"
     response.headers["Content-Disposition"] = "inline"
     response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
-    if asset.file_size:
-        response.headers["Content-Length"] = str(asset.file_size)
+    if published_asset.get("size"):
+        response.headers["Content-Length"] = str(published_asset["size"])
     return response
 
 

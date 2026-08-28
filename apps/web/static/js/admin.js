@@ -22,6 +22,66 @@ document.querySelectorAll('[data-copy-target]').forEach((button) => {
   });
 });
 
+document.querySelectorAll('[data-asset-upload-form]').forEach((form) => {
+  const fileInput = form.querySelector('[data-asset-file]');
+  const urlInput = form.querySelector('[data-asset-url]');
+  const websiteMode = form.querySelector('[data-website-mode]');
+  const hint = form.querySelector('[data-asset-kind-hint]');
+
+  const fileKind = (file) => {
+    if (!file) return '';
+    if (file.type.startsWith('image/')) return 'Фото';
+    if (file.type.startsWith('video/')) return 'Видео';
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tif', 'tiff'].includes(extension)) return 'Фото';
+    if (['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'mpeg', 'mpg'].includes(extension)) return 'Видео';
+    return 'Файл будет проверен сервером';
+  };
+
+  const updateHint = () => {
+    const file = fileInput?.files?.[0];
+    const hasUrl = Boolean(urlInput?.value.trim());
+    if (file) hint.textContent = `Определён тип: ${fileKind(file)}. Сервер проверит содержимое после загрузки.`;
+    else if (hasUrl) hint.textContent = 'Определён тип: Сайт.';
+    else hint.textContent = 'Загрузите фото или видео либо вставьте ссылку — тип определится автоматически.';
+    if (websiteMode) websiteMode.closest('p').hidden = !hasUrl || Boolean(file);
+  };
+
+  fileInput?.addEventListener('change', updateHint);
+  urlInput?.addEventListener('input', updateHint);
+  updateHint();
+});
+
+document.querySelectorAll('[data-playlist-item-form]').forEach((form) => {
+  const itemType = form.querySelector('#id_item_type');
+  const assetSelect = form.querySelector('#id_asset');
+  const sceneSelect = form.querySelector('#id_scene');
+  const durationInput = form.querySelector('#id_duration_seconds');
+
+  const applyAssetDefaults = () => {
+    const option = assetSelect?.selectedOptions?.[0];
+    if (!option?.value || !durationInput) return;
+    const durationMs = Number(option.dataset.durationMs || 0);
+    durationInput.value = option.dataset.kind === 'video' && durationMs > 0
+      ? Math.max(1, Math.ceil(durationMs / 1000))
+      : 10;
+  };
+
+  assetSelect?.addEventListener('change', () => {
+    if (!assetSelect.value) return;
+    if (itemType) itemType.value = 'asset';
+    if (sceneSelect) sceneSelect.value = '';
+    applyAssetDefaults();
+  });
+  sceneSelect?.addEventListener('change', () => {
+    if (!sceneSelect.value) return;
+    if (itemType) itemType.value = 'scene';
+    if (assetSelect) assetSelect.value = '';
+    if (durationInput) durationInput.value = 10;
+  });
+  applyAssetDefaults();
+});
+
 const sortable = document.getElementById('playlist-items');
 if (sortable) {
   let dragged = null;
@@ -53,4 +113,3 @@ if (sortable) {
 }
 
 window.setTimeout(() => document.querySelectorAll('.messages .message').forEach((message) => message.remove()), 6000);
-

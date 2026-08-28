@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.2.0-browser';
+  const VERSION = '0.3.0-browser';
   const root = document.getElementById('signage-player');
   const stage = document.getElementById('stage');
   const empty = document.getElementById('empty-state');
@@ -22,6 +22,8 @@
   let globalMuted = false;
   let globalVolume = 1;
   let manifestLoading = false;
+  let volumeOverridden = false;
+  let audioPrompt = null;
 
   const now = () => Date.now() + serverOffsetMs;
   const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -59,13 +61,15 @@
     }
     const total = items.reduce((sum, item) => sum + Math.max(1000, item.durationMs), 0);
     const epoch = Date.parse(manifest.screen?.timelineEpoch || manifest.timelineEpoch || manifest.generatedAt);
-    let phase = ((now() - epoch) % total + total) % total;
+    const timelinePosition = now() - epoch;
+    const cycle = Math.floor(timelinePosition / total);
+    let phase = (timelinePosition % total + total) % total;
     for (let index = 0; index < items.length; index += 1) {
       const duration = Math.max(1000, items[index].durationMs);
-      if (phase < duration) return {item: items[index], index, elapsed: phase, remaining: duration - phase};
+      if (phase < duration) return {item: items[index], index, elapsed: phase, remaining: duration - phase, cycle};
       phase -= duration;
     }
-    return {item: items[0], index: 0, elapsed: 0, remaining: items[0].durationMs};
+    return {item: items[0], index: 0, elapsed: 0, remaining: items[0].durationMs, cycle};
   }
 
   function activeItems() {
@@ -127,7 +131,7 @@
   function renderAsset(item, elapsed) {
     const asset = item.asset;
     if (asset.kind === 'image' || asset.websiteMode === 'snapshot') return `<article class="stage-item"><img class="${fitClass(item.fit)}" src="${esc(asset.mediaUrl)}" alt=""></article>`;
-    if (asset.kind === 'video') return `<article class="stage-item"><video class="${fitClass(item.fit)}" src="${esc(asset.mediaUrl)}" playsinline preload="auto" ${item.muted || manifest.channel.muted ? 'muted' : ''}></video></article>`;
+    if (asset.kind === 'video') return `<article class="stage-item"><video class="${fitClass(item.fit)}" src="${esc(asset.mediaUrl)}" playsinline autoplay preload="auto" ${item.muted || manifest.channel.muted ? 'muted' : ''}></video></article>`;
     if (asset.kind === 'website') return `<article class="stage-item"><iframe class="website-frame" src="${esc(asset.url)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" referrerpolicy="no-referrer"></iframe></article>`;
     return `<article class="stage-item player-error"><strong>Неизвестный тип контента</strong></article>`;
   }
@@ -142,12 +146,76 @@
     node.querySelectorAll('.footer-time').forEach((element) => element.textContent = `${formattedDate} · ${clock.slice(0,5)} · ${timezone}`);
   }
 
+  function videoShouldBeMuted(item) {
+    return Boolean(item.muted || manifest.channel.muted || globalMuted);
+  }
+
+  function applyVideoVolume(video, item) {
+    const itemVolume = Math.min(1, Math.max(0, (item.volume ?? 100) / 100));
+    video.dataset.itemVolume = String(itemVolume);
+    video.volume = Math.min(1, Math.max(0, itemVolume * globalVolume));
+  }
+
+  function showAudioPrompt() {
+    if (!audioPrompt) {
+      audioPrompt = document.createElement('button');
+      audioPrompt.type = 'button';
+      audioPrompt.className = 'audio-unlock';
+      audioPrompt.textContent = 'Нажмите, чтобы включить звук';
+      root.appendChild(audioPrompt);
+      audioPrompt.addEventListener('click', unlockAudio);
+    }
+    audioPrompt.hidden = false;
+  }
+
+  async function unlockAudio() {
+    const video = activeNode?.querySelector('video');
+    if (!video || globalMuted || manifest.channel.muted) return;
+    video.muted = false;
+    try {
+      await video.play();
+      audioPrompt.hidden = true;
+      if (lastError.startsWith('Звук заблокирован')) lastError = '';
+    } catch (error) {
+      video.muted = true;
+      lastError = `Звук заблокирован браузером: ${error.message}`;
+    }
+  }
+
+  async function startVideo(video, item, elapsed, node) {
+    if (!node.isConnected) return;
+    const target = Math.min(elapsed / 1000, Math.max(0, video.duration - .2));
+    if (Number.isFinite(target)) video.currentTime = target;
+    video.muted = videoShouldBeMuted(item);
+    applyVideoVolume(video, item);
+    try {
+      await video.play();
+      if (audioPrompt) audioPrompt.hidden = true;
+      if (!video.muted && lastError.startsWith('Звук заблокирован')) lastError = '';
+    } catch (error) {
+      if (error.name === 'NotAllowedError' && !video.muted) {
+        video.muted = true;
+        try {
+          await video.play();
+          lastError = 'Звук заблокирован браузером · видео воспроизводится без звука';
+          showAudioPrompt();
+          return;
+        } catch (mutedError) {
+          lastError = `Видео: ${mutedError.message}`;
+          return;
+        }
+      }
+      lastError = `Видео: ${error.message}`;
+    }
+  }
+
   function showSlot(slot) {
     currentIndex = slot.index;
-    const signature = `${manifest.revision}:${slot.item.key}:${forcedIndex ?? 'sync'}`;
+    const signature = `${manifest.revision}:${slot.item.key}:${forcedIndex ?? `cycle-${slot.cycle}`}`;
     if (signature === activeKey) return;
     activeKey = signature;
     clearInterval(clockTimer);
+    if (audioPrompt) audioPrompt.hidden = true;
     const wrapper = document.createElement('div');
     wrapper.innerHTML = slot.item.type === 'scene' ? renderScene(slot.item) : renderAsset(slot.item, slot.elapsed);
     const node = wrapper.firstElementChild;
@@ -159,14 +227,20 @@
     }
     const video = node.querySelector('video');
     if (video) {
-      video.volume = Math.min(1, Math.max(0, (slot.item.volume ?? 100) / 100 * globalVolume));
-      video.muted = Boolean(slot.item.muted || manifest.channel.muted || globalMuted);
-      video.addEventListener('loadedmetadata', () => {
-        const target = Math.min(slot.elapsed / 1000, Math.max(0, video.duration - .2));
-        if (Number.isFinite(target)) video.currentTime = target;
-        video.play().catch((error) => { lastError = `Видео: ${error.message}`; });
-      }, {once:true});
+      const begin = () => startVideo(video, slot.item, slot.elapsed, node);
+      if (video.readyState >= 1) begin();
+      else video.addEventListener('loadedmetadata', begin, {once:true});
       video.addEventListener('error', () => { lastError = 'Не удалось воспроизвести видео'; });
+      video.addEventListener('playing', () => {
+        if (!video.muted && lastError.startsWith('Звук заблокирован')) lastError = '';
+        if (lastError.startsWith('Видео:') || lastError === 'Не удалось воспроизвести видео') lastError = '';
+      });
+      video.addEventListener('ended', () => setTimeout(() => {
+        if (activeNode === node && video.ended) {
+          activeKey = '';
+          schedulePlayback();
+        }
+      }, 250), {once:true});
     }
     const image = node.querySelector('img.fit-cover,img.fit-contain,img.fit-stretch');
     if (image) image.addEventListener('error', () => { lastError = 'Не удалось загрузить изображение'; });
@@ -205,8 +279,12 @@
       if (next.serverTime && !offline) serverOffsetMs = Date.parse(next.serverTime) - Date.now();
       const changed = !manifest || next.revision !== manifest.revision;
       manifest = next;
+      if (!volumeOverridden) {
+        globalVolume = Math.min(1, Math.max(0, (manifest.channel?.defaultVolume ?? 100) / 100));
+      }
       connectionState.hidden = !offline;
-      lastError = offline ? 'Нет связи с сервером · показ из кеша' : '';
+      if (offline) lastError = 'Нет связи с сервером · показ из кеша';
+      else if (lastError.startsWith('Нет связи с сервером') || lastError.startsWith('Связь:')) lastError = '';
       if (changed) { activeKey = ''; schedulePlayback(); }
     } catch (error) {
       connectionState.hidden = false;
@@ -254,9 +332,30 @@
         if (item.command === 'next' && items.length) { forcedIndex = currentIndex + 1; activeKey=''; schedulePlayback(); }
         if (item.command === 'previous' && items.length) { forcedIndex = currentIndex - 1; activeKey=''; schedulePlayback(); }
         if (item.command === 'reload') location.reload();
-        if (item.command === 'mute') { globalMuted = true; activeNode?.querySelectorAll('video').forEach((video) => video.muted = true); }
-        if (item.command === 'unmute') { globalMuted = false; activeNode?.querySelectorAll('video').forEach((video) => video.muted = false); }
-        if (item.command === 'volume') { globalVolume = Math.max(0,Math.min(1,(item.payload?.value ?? 100)/100)); activeNode?.querySelectorAll('video').forEach((video) => video.volume = globalVolume); }
+        if (item.command === 'mute') {
+          globalMuted = true;
+          if (audioPrompt) audioPrompt.hidden = true;
+          activeNode?.querySelectorAll('video').forEach((video) => { video.muted = true; });
+        }
+        if (item.command === 'unmute') {
+          globalMuted = false;
+          activeNode?.querySelectorAll('video').forEach((video) => {
+            video.muted = false;
+            video.play().catch(() => {
+              video.muted = true;
+              lastError = 'Звук заблокирован браузером · видео воспроизводится без звука';
+              showAudioPrompt();
+            });
+          });
+        }
+        if (item.command === 'volume') {
+          volumeOverridden = true;
+          globalVolume = Math.max(0,Math.min(1,(item.payload?.value ?? 100)/100));
+          activeNode?.querySelectorAll('video').forEach((video) => {
+            const itemVolume = Number(video.dataset.itemVolume || 1);
+            video.volume = Math.min(1, Math.max(0, itemVolume * globalVolume));
+          });
+        }
         acknowledge(item.id);
       }
     } catch (_) { connectionState.hidden = false; }

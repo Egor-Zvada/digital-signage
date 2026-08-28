@@ -22,14 +22,20 @@ if ! id signage >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 /opt/signage "$release_root"
+install -d -o signage -g www-data -m 0750 /srv/signage
 install -d -o signage -g signage -m 0750 \
     /srv/signage/uploads \
+    /srv/signage/site-snapshots \
+    /srv/signage/backups/postgres
+install -d -o signage -g www-data -m 2750 \
+    /srv/signage/media \
     /srv/signage/media/originals \
     /srv/signage/media/renditions \
     /srv/signage/media/thumbnails \
-    /srv/signage/site-snapshots \
-    /srv/signage/backups/postgres
-install -d -o signage -g www-data -m 0750 /srv/signage/static
+    /srv/signage/static
+chown -R signage:www-data /srv/signage/media
+find /srv/signage/media -type d -exec chmod 2750 {} +
+find /srv/signage/media -type f -exec chmod 0640 {} +
 install -d -o root -g signage -m 0750 /etc/signage
 
 if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='signage'" | grep -q 1; then
@@ -99,6 +105,9 @@ runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" migrate --noinput
 runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" collectstatic --noinput
+chown -R signage:www-data /srv/signage/static
+find /srv/signage/static -type d -exec chmod 2750 {} +
+find /srv/signage/static -type f -exec chmod 0640 {} +
 runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" seed_signage
 
@@ -147,6 +156,19 @@ if [[ $health_ok -ne 1 ]]; then
     systemctl --no-pager --full status signage-web nginx >&2 || true
     exit 1
 fi
+for static_path in \
+    /static/css/admin.css \
+    /static/css/player.css \
+    /static/js/player.js \
+    /static/brand/school-logo.png; do
+    if ! curl --fail --silent --show-error --output /dev/null \
+        --cacert "$tls_dir/ca.crt" \
+        --resolve signage.vve.local:443:127.0.0.1 \
+        "https://signage.vve.local${static_path}"; then
+        echo "Статический ресурс недоступен: ${static_path}" >&2
+        exit 1
+    fi
+done
 echo
 echo "Digital Signage установлен: https://signage.vve.local/"
 echo "Корневой сертификат: http://signage.vve.local/signage-ca.crt"

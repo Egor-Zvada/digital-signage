@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 import socket
@@ -17,7 +18,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from core.models import Asset, WeatherSource, WorkerJob
 from core.services.weather import update_weather
@@ -29,6 +30,103 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def ffprobe(path: Path) -> dict:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=True)
+    return json.loads(completed.stdout)
+
+
+def first_stream(probe: dict, codec_type: str) -> dict | None:
+    return next(
+        (
+            stream
+            for stream in probe.get("streams", [])
+            if stream.get("codec_type") == codec_type
+        ),
+        None,
+    )
+
+
+def duration_ms(probe: dict, video: dict) -> int | None:
+    duration = video.get("duration") or probe.get("format", {}).get("duration")
+    return int(float(duration) * 1000) if duration else None
+
+
+def is_browser_compatible(video: dict, audio: dict | None) -> bool:
+    return (
+        video.get("codec_name") == "h264"
+        and video.get("pix_fmt") in {"yuv420p", "yuvj420p"}
+        and (audio is None or audio.get("codec_name") == "aac")
+    )
+
+
+def needs_browser_rendition(source: Path, video: dict, audio: dict | None) -> bool:
+    return source.suffix.lower() not in {".mp4", ".m4v"} or not is_browser_compatible(
+        video, audio
+    )
+
+
+def transcode_for_browser(asset: Asset, source: Path) -> tuple[Path, dict]:
+    output_dir = settings.MEDIA_ROOT / "renditions" / asset.id.hex[:2]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"{asset.id}.mp4"
+    temporary = output.with_suffix(".tmp.mp4")
+    temporary.unlink(missing_ok=True)
+    command = [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ac",
+        "2",
+        "-max_muxing_queue_size",
+        "2048",
+        str(temporary),
+    ]
+    try:
+        subprocess.run(command, capture_output=True, text=True, timeout=4 * 60 * 60, check=True)
+        rendition_probe = ffprobe(temporary)
+        rendition_video = first_stream(rendition_probe, "video")
+        rendition_audio = first_stream(rendition_probe, "audio")
+        if not rendition_video or not is_browser_compatible(rendition_video, rendition_audio):
+            raise ValueError("FFmpeg не создал совместимое H.264/AAC видео")
+        os.replace(temporary, output)
+        return output, rendition_probe
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "")[-1200:].strip()
+        raise ValueError(f"Не удалось подготовить видео для браузера: {detail}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def assert_public_http_url(raw_url: str) -> None:
@@ -147,7 +245,7 @@ class Command(BaseCommand):
         path = Path(asset.file.path)
         asset.file_size = path.stat().st_size
         asset.sha256 = sha256_file(path)
-        if asset.kind == Asset.Kind.IMAGE:
+        try:
             with Image.open(path) as image:
                 image.verify()
             with Image.open(path) as image:
@@ -155,41 +253,58 @@ class Command(BaseCommand):
                 asset.mime_type = (
                     Image.MIME.get(image.format, mimetypes.guess_type(path.name)[0]) or "image/jpeg"
                 )
-        elif asset.kind == Asset.Kind.VIDEO:
-            command = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                str(path),
-            ]
-            completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=120, check=True
-            )
-            probe = json.loads(completed.stdout)
-            video = next(
-                (
-                    stream
-                    for stream in probe.get("streams", [])
-                    if stream.get("codec_type") == "video"
-                ),
-                None,
-            )
+            asset.kind = Asset.Kind.IMAGE
+            asset.duration_ms = None
+            asset.metadata = {}
+        except (UnidentifiedImageError, OSError, SyntaxError):
+            probe = ffprobe(path)
+            video = first_stream(probe, "video")
             if not video:
-                raise ValueError("В файле не найден видеопоток")
-            asset.width = int(video.get("width") or 0) or None
-            asset.height = int(video.get("height") or 0) or None
-            duration = video.get("duration") or probe.get("format", {}).get("duration")
-            asset.duration_ms = int(float(duration) * 1000) if duration else None
+                raise ValueError("Файл не является поддерживаемым фото или видео") from None
+            audio = first_stream(probe, "audio")
+            playback_path = path
+            playback_probe = probe
+            transcoded = needs_browser_rendition(path, video, audio)
+            if transcoded:
+                playback_path, playback_probe = transcode_for_browser(asset, path)
+            playback_video = first_stream(playback_probe, "video")
+            playback_audio = first_stream(playback_probe, "audio")
+            if not playback_video:
+                raise ValueError("В подготовленном файле не найден видеопоток") from None
+            playback_duration_ms = duration_ms(playback_probe, playback_video)
+            if not playback_duration_ms:
+                raise ValueError("Не удалось определить длительность видео") from None
+            asset.kind = Asset.Kind.VIDEO
+            asset.width = int(playback_video.get("width") or 0) or None
+            asset.height = int(playback_video.get("height") or 0) or None
+            asset.duration_ms = playback_duration_ms
             asset.mime_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
-            asset.metadata = {"probe": {"format": probe.get("format", {}), "video": video}}
+            asset.metadata = {
+                "probe": {
+                    "format": probe.get("format", {}),
+                    "video": video,
+                    "audio": audio,
+                },
+                "playback": {
+                    "path": playback_path.relative_to(settings.MEDIA_ROOT).as_posix(),
+                    "mimeType": "video/mp4",
+                    "fileSize": playback_path.stat().st_size,
+                    "sha256": sha256_file(playback_path),
+                    "durationMs": playback_duration_ms,
+                    "width": asset.width,
+                    "height": asset.height,
+                    "videoCodec": playback_video.get("codec_name", ""),
+                    "audioCodec": playback_audio.get("codec_name", "")
+                    if playback_audio
+                    else "",
+                    "transcoded": transcoded,
+                },
+            }
         asset.status = Asset.Status.READY
         asset.error_message = ""
         asset.save(
             update_fields=[
+                "kind",
                 "file_size",
                 "sha256",
                 "width",
@@ -202,6 +317,9 @@ class Command(BaseCommand):
                 "updated_at",
             ]
         )
+        if asset.kind == Asset.Kind.VIDEO and asset.duration_ms:
+            seconds = min(86400, max(1, math.ceil(asset.duration_ms / 1000)))
+            asset.playlist_items.update(duration_seconds=seconds)
 
     def snapshot(self, asset: Asset) -> None:
         assert_public_http_url(asset.source_url)

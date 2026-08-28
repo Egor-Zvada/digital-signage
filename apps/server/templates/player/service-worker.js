@@ -1,32 +1,37 @@
 'use strict';
 
-const WORKER_VERSION = '0.2.0';
+const WORKER_VERSION = '0.3.0';
 const scopeUrl = new URL(self.registration.scope);
 const scopeParts = scopeUrl.pathname.split('/').filter(Boolean);
 const screenKey = (scopeParts.at(-2) || 'screen').replace(/[^a-zA-Z0-9-]/g, '');
 const playerUrl = new URL('./', scopeUrl).href;
 const manifestUrl = new URL('manifest.json', scopeUrl).href;
 const metaUrl = new URL('__offline_meta__', scopeUrl).href;
-const shellCache = `signage-shell-${screenKey}-v2`;
-const metaCache = `signage-meta-${screenKey}`;
-const mediaPrefix = `signage-media-${screenKey}-r`;
+const shellCache = `signage-shell-${screenKey}-v3`;
+const metaCache = `signage-meta-${screenKey}-v2`;
+const mediaPrefix = `signage-media-${screenKey}-v2-r`;
 const shellAssets = [
   playerUrl,
-  new URL('/static/css/player.css', scopeUrl).href,
-  new URL('/static/js/player.js', scopeUrl).href,
+  new URL('/static/css/player.css?v=0.3.0', scopeUrl).href,
+  new URL('/static/js/player.js?v=0.3.0', scopeUrl).href,
   new URL('/static/brand/school-logo.png', scopeUrl).href,
 ];
 let stagingPromise = null;
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(shellCache).then((cache) => cache.addAll(shellAssets)).then(() => self.skipWaiting()));
+  const freshShell = shellAssets.map((url) => new Request(url, {cache: 'reload'}));
+  event.waitUntil(caches.open(shellCache).then((cache) => cache.addAll(freshShell)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     await Promise.all(names
-      .filter((name) => name.startsWith(`signage-shell-${screenKey}-`) && name !== shellCache)
+      .filter((name) => (
+        (name.startsWith(`signage-shell-${screenKey}-`) && name !== shellCache)
+        || name === `signage-meta-${screenKey}`
+        || name.startsWith(`signage-media-${screenKey}-r`)
+      ))
       .map((name) => caches.delete(name)));
     await self.clients.claim();
   })());
@@ -125,7 +130,7 @@ async function stageRevision(candidate, manifestResponse, oldMeta) {
   try {
     for (const item of candidate.items || []) {
       const asset = item.asset || {};
-      if (!asset.mediaUrl) continue;
+      if (!asset.mediaUrl || asset.kind === 'video') continue;
       const url = new URL(asset.mediaUrl, scopeUrl).href;
       const options = {cache: 'no-store', credentials: 'same-origin'};
       if (/^[0-9a-f]{64}$/i.test(asset.sha256 || '')) {
