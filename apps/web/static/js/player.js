@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.3.0-browser';
+  const VERSION = '0.3.1-browser';
   const root = document.getElementById('signage-player');
   const stage = document.getElementById('stage');
   const empty = document.getElementById('empty-state');
@@ -23,7 +23,6 @@
   let globalVolume = 1;
   let manifestLoading = false;
   let volumeOverridden = false;
-  let audioPrompt = null;
 
   const now = () => Date.now() + serverOffsetMs;
   const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -156,32 +155,6 @@
     video.volume = Math.min(1, Math.max(0, itemVolume * globalVolume));
   }
 
-  function showAudioPrompt() {
-    if (!audioPrompt) {
-      audioPrompt = document.createElement('button');
-      audioPrompt.type = 'button';
-      audioPrompt.className = 'audio-unlock';
-      audioPrompt.textContent = 'Нажмите, чтобы включить звук';
-      root.appendChild(audioPrompt);
-      audioPrompt.addEventListener('click', unlockAudio);
-    }
-    audioPrompt.hidden = false;
-  }
-
-  async function unlockAudio() {
-    const video = activeNode?.querySelector('video');
-    if (!video || globalMuted || manifest.channel.muted) return;
-    video.muted = false;
-    try {
-      await video.play();
-      audioPrompt.hidden = true;
-      if (lastError.startsWith('Звук заблокирован')) lastError = '';
-    } catch (error) {
-      video.muted = true;
-      lastError = `Звук заблокирован браузером: ${error.message}`;
-    }
-  }
-
   async function startVideo(video, item, elapsed, node) {
     if (!node.isConnected) return;
     const target = Math.min(elapsed / 1000, Math.max(0, video.duration - .2));
@@ -190,7 +163,6 @@
     applyVideoVolume(video, item);
     try {
       await video.play();
-      if (audioPrompt) audioPrompt.hidden = true;
       if (!video.muted && lastError.startsWith('Звук заблокирован')) lastError = '';
     } catch (error) {
       if (error.name === 'NotAllowedError' && !video.muted) {
@@ -198,7 +170,6 @@
         try {
           await video.play();
           lastError = 'Звук заблокирован браузером · видео воспроизводится без звука';
-          showAudioPrompt();
           return;
         } catch (mutedError) {
           lastError = `Видео: ${mutedError.message}`;
@@ -215,7 +186,6 @@
     if (signature === activeKey) return;
     activeKey = signature;
     clearInterval(clockTimer);
-    if (audioPrompt) audioPrompt.hidden = true;
     const wrapper = document.createElement('div');
     wrapper.innerHTML = slot.item.type === 'scene' ? renderScene(slot.item) : renderAsset(slot.item, slot.elapsed);
     const node = wrapper.firstElementChild;
@@ -334,7 +304,6 @@
         if (item.command === 'reload') location.reload();
         if (item.command === 'mute') {
           globalMuted = true;
-          if (audioPrompt) audioPrompt.hidden = true;
           activeNode?.querySelectorAll('video').forEach((video) => { video.muted = true; });
         }
         if (item.command === 'unmute') {
@@ -344,7 +313,6 @@
             video.play().catch(() => {
               video.muted = true;
               lastError = 'Звук заблокирован браузером · видео воспроизводится без звука';
-              showAudioPrompt();
             });
           });
         }
