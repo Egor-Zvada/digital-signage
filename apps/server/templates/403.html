@@ -1,0 +1,5 @@
+{% extends 'base.html' %}
+{% block title %}Недостаточно прав{% endblock %}
+{% block content %}
+<section class="empty-card"><strong>Недостаточно прав</strong><p>Ваша роль не разрешает открывать этот раздел. Если доступ необходим, обратитесь к администратору.</p><a class="button primary" href="{% url 'dashboard' %}">Вернуться на обзор</a></section>
+{% endblock %}

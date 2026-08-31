@@ -103,3 +103,11 @@ admin.site.register(AuditEvent)
 
 admin.site.site_header = "ОГАУ ДО «СШ ВВЕ» — цифровые экраны"
 admin.site.site_title = "Digital Signage"
+
+
+def _superuser_only(request):
+    """Keep the low-level Django admin outside the application role model."""
+    return request.user.is_active and request.user.is_superuser
+
+
+admin.site.has_permission = _superuser_only

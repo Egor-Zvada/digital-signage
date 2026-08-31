@@ -82,6 +82,19 @@ document.querySelectorAll('[data-playlist-item-form]').forEach((form) => {
   applyAssetDefaults();
 });
 
+document.querySelectorAll('[data-widget-editor]').forEach((form) => {
+  const typeSelect = form.querySelector('#id_scene_type');
+  const updateVisibleFields = () => {
+    const selectedType = typeSelect?.value || '';
+    form.querySelectorAll('[data-widget-types]').forEach((group) => {
+      const supported = group.dataset.widgetTypes.split(/\s+/);
+      group.hidden = selectedType && !supported.includes(selectedType);
+    });
+  };
+  typeSelect?.addEventListener('change', updateVisibleFields);
+  updateVisibleFields();
+});
+
 const sortable = document.getElementById('playlist-items');
 if (sortable) {
   let dragged = null;

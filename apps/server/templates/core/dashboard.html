@@ -2,17 +2,33 @@
 {% block title %}Обзор{% endblock %}
 {% block content %}
 <header class="page-header">
-  <div><p class="eyebrow">Система работает</p><h1>Обзор экранов</h1></div>
+  <div><p class="eyebrow">Центр управления</p><h1>Обзор системы</h1><p class="muted">Контент, эфир и состояние контейнера на одном экране.</p></div>
   <div class="status-chip"><span></span> {{ screens_online }} из {{ screens_count }} в сети</div>
 </header>
+
+{% if operational_access %}
+<section class="system-hero">
+  <article class="system-card"><div><span>CPU / нагрузка</span><strong>{{ system.load_percent }}%</strong></div><div class="progress"><i style="width:{{ system.load_percent }}%"></i></div><small>{{ system.cpu_count }} CPU · load {{ system.load }}</small></article>
+  <article class="system-card"><div><span>Оперативная память</span><strong>{{ system.memory_percent }}%</strong></div><div class="progress"><i style="width:{{ system.memory_percent }}%"></i></div><small>{{ system.memory_used }} из {{ system.memory_total }}</small></article>
+  <article class="system-card"><div><span>Диск контейнера</span><strong>{{ system.disk_percent }}%</strong></div><div class="progress"><i style="width:{{ system.disk_percent }}%"></i></div><small>{{ system.disk_used }} из {{ system.disk_total }} · свободно {{ system.disk_free }}</small></article>
+  <article class="system-card identity-card"><div><span>{{ system.container }} · {{ system.hostname }}</span><strong>{{ system.uptime }}</strong></div><small>{{ system.platform }}</small></article>
+</section>
+<section class="service-strip"><div><p class="eyebrow">Службы</p>{% for service in system.services %}<span class="service-state {% if service.ok %}ok{% else %}bad{% endif %}"><i></i>{{ service.name }}</span>{% endfor %}</div><div class="content-health"><span><strong>{{ content_ready }}</strong> готово</span><span><strong>{{ content_processing }}</strong> обрабатывается</span><span><strong>{{ content_failed }}</strong> ошибок</span><span><strong>{{ jobs_waiting }}</strong> заданий</span><span><strong>{{ content_bytes|filesizeformat }}</strong> исходников</span></div></section>
+{% endif %}
 
 <section class="metrics">
   <a href="{% url 'assets' %}" class="metric"><span>Контент</span><strong>{{ assets_count }}</strong><small>файлов и сайтов</small></a>
   <a href="{% url 'playlists' %}" class="metric"><span>Плейлисты</span><strong>{{ playlists_count }}</strong><small>очередей показа</small></a>
-  <a href="{% url 'channels' %}" class="metric"><span>Каналы</span><strong>{{ channels_count }}</strong><small>программ вещания</small></a>
-  <a href="{% url 'screens' %}" class="metric"><span>Экраны</span><strong>{{ screens_count }}</strong><small>{{ screens_online }} подключено</small></a>
+  {% if operational_access %}
+    <a href="{% url 'channels' %}" class="metric"><span>Каналы</span><strong>{{ channels_count }}</strong><small>программ вещания</small></a>
+    <a href="{% url 'screens' %}" class="metric"><span>Экраны</span><strong>{{ screens_count }}</strong><small>{{ screens_online }} подключено</small></a>
+  {% else %}
+    <div class="metric"><span>Каналы</span><strong>{{ channels_count }}</strong><small>публикует модератор</small></div>
+    <div class="metric"><span>Экраны</span><strong>{{ screens_count }}</strong><small>{{ screens_online }} подключено</small></div>
+  {% endif %}
 </section>
 
+{% if operational_access %}
 <div class="two-columns">
   <section class="panel">
     <div class="panel-heading"><div><p class="eyebrow">Состояние</p><h2>Последние экраны</h2></div><a href="{% url 'screens' %}">Все экраны</a></div>
@@ -22,12 +38,14 @@
     </tbody></table></div>
   </section>
   <section class="panel">
-    <div class="panel-heading"><div><p class="eyebrow">Журнал</p><h2>Последние действия</h2></div></div>
-    <div class="event-list">
-      {% for event in recent_events %}<article><span class="event-dot"></span><div><strong>{{ event.action }}</strong><p>{{ event.object_type }} {{ event.object_id }}</p><small>{{ event.created_at|date:'d.m.Y H:i:s' }} · {{ event.actor|default:'система' }}</small></div></article>
+    <div class="panel-heading compact-heading"><div><p class="eyebrow">Журнал</p><h2>Последние действия</h2></div></div>
+    <div class="event-list compact-events">
+      {% for event in recent_events %}<article><span class="event-dot"></span><div><strong>{{ event.display_action }}</strong><small>{{ event.created_at|date:'d.m H:i' }} · {{ event.actor|default:'система' }}</small></div></article>
       {% empty %}<p class="empty">Журнал пока пуст.</p>{% endfor %}
     </div>
   </section>
 </div>
+{% else %}
+<section class="panel user-start-panel"><div><p class="eyebrow">Рабочий процесс</p><h2>Подготовьте следующую публикацию</h2><p class="muted">Загрузите материалы, расставьте их в плейлисте и сообщите модератору, что очередь готова к публикации.</p></div><div class="wiki-flow"><a href="{% url 'assets' %}">1 · Контент</a><i>→</i><a href="{% url 'playlists' %}">2 · Плейлист</a><i>→</i><a href="{% url 'wiki_article' 'quick-start' %}">3 · Инструкция</a></div></section>
+{% endif %}
 {% endblock %}
-

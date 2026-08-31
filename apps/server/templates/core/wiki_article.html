@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}{{ article.title }}{% endblock %}
+{% block content %}
+<div class="wiki-layout">
+  <aside class="wiki-toc"><a class="back-link" href="{% url 'wiki' %}">← Оглавление</a><strong>Статьи</strong>{% for item in articles %}<a href="{% url 'wiki_article' item.slug %}" class="{% if item.slug == article.slug %}active{% endif %}">{{ item.icon }} · {{ item.title }}</a>{% endfor %}</aside>
+  <article class="wiki-article">
+    <header><p class="eyebrow">{{ article.audience }}</p><h1>{{ article.title }}</h1><p>{{ article.summary }}</p></header>
+    {% if article.flow %}<div class="wiki-flow article-flow">{% for item in article.flow %}<span>{{ item }}</span>{% if not forloop.last %}<i>→</i>{% endif %}{% endfor %}</div>{% endif %}
+    {% for section in article.sections %}<section><h2>{{ section.title }}</h2>
+      {% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}
+      {% if section.steps %}<ol>{% for step in section.steps %}<li>{{ step }}</li>{% endfor %}</ol>{% endif %}
+      {% if section.bullets %}<ul>{% for item in section.bullets %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+      {% if section.buttons %}<div class="wiki-button-table">{% for name, description in section.buttons %}<div><code>{{ name }}</code><p>{{ description }}</p></div>{% endfor %}</div>{% endif %}
+      {% if section.example %}<div class="wiki-example"><strong>Пример</strong><p>{{ section.example }}</p></div>{% endif %}
+    </section>{% endfor %}
+  </article>
+</div>
+{% endblock %}

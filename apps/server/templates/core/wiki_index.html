@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Вики{% endblock %}
+{% block content %}
+<header class="page-header wiki-hero"><div><p class="eyebrow">Справочный центр</p><h1>Вики Digital Signage</h1><p class="muted">Подробные инструкции по каждому модулю, кнопке и типичному сценарию.</p></div><span class="status-chip"><span></span> {{ articles|length }} статей</span></header>
+<form class="wiki-search" method="get"><input class="field-control" name="q" value="{{ query }}" placeholder="Найти: видео, расписание, публикация, звук…"><button class="button primary">Найти</button>{% if query %}<a class="button secondary" href="{% url 'wiki' %}">Сбросить</a>{% endif %}</form>
+<section class="wiki-flow"><span>Контент</span><i>→</i><span>Плейлист</span><i>→</i><span>Канал</span><i>→</i><span>Экран</span></section>
+<section class="wiki-grid">
+{% for article in articles %}<a class="wiki-card" href="{% url 'wiki_article' article.slug %}"><span class="wiki-number">{{ article.icon }}</span><div><small>{{ article.audience }}</small><h2>{{ article.title }}</h2><p>{{ article.summary }}</p></div><i>→</i></a>
+{% empty %}<div class="empty-card"><strong>Ничего не найдено</strong><p>Попробуйте другое слово или сбросьте поиск.</p></div>{% endfor %}
+</section>
+{% endblock %}

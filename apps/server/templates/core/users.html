@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Администрирование{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Доступ</p><h1>Администрирование</h1><p class="muted">Создание пользователей, назначение ролей и отключение учётных записей.</p></div><button class="button primary" data-dialog-open="user-dialog">Создать пользователя</button></header>
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Пользователь</th><th>Роль</th><th>Состояние</th><th>Последний вход</th><th></th></tr></thead><tbody>
+{% for row in rows %}<tr><td><strong>{{ row.user.username }}</strong><small class="block">{{ row.user.get_full_name|default:row.user.email|default:'Имя не указано' }}</small></td><td><span class="badge role-{{ row.role }}">{{ row.role_label }}</span>{% if row.user.is_superuser %}<small class="block">Суперпользователь</small>{% endif %}</td><td><span class="badge {% if row.user.is_active %}ready{% else %}unknown{% endif %}">{% if row.user.is_active %}Активен{% else %}Отключён{% endif %}</span></td><td>{{ row.user.last_login|date:'d.m.Y H:i'|default:'—' }}</td><td><a class="button ghost" href="{% url 'user_edit' row.user.id %}">Изменить</a></td></tr>
+{% empty %}<tr><td colspan="5" class="empty">Пользователей нет.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<section class="role-explainer"><article><strong>Пользователь</strong><p>Контент и плейлисты.</p></article><article><strong>Модератор</strong><p>Весь эфир, кроме пользователей.</p></article><article><strong>Администратор</strong><p>Полный доступ и управление ролями.</p></article></section>
+<dialog id="user-dialog" class="modal wide" {% if form.errors %}open{% endif %}><form method="post" class="stack-form">{% csrf_token %}<div class="modal-heading"><div><p class="eyebrow">Новая учётная запись</p><h2>Создать пользователя</h2></div><button type="button" class="icon-button" data-dialog-close>×</button></div><div class="form-grid">{{ form.as_p }}</div><div class="modal-actions"><button type="button" class="button secondary" data-dialog-close>Отмена</button><button class="button primary">Создать</button></div></form></dialog>
+{% endblock %}

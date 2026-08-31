@@ -15,6 +15,7 @@ from core.models import (
     WeatherSource,
     WorkerJob,
 )
+from core.permissions import ensure_role_groups
 
 FULL_NAME = (
     "Областное государственное автономное учреждение дополнительного образования "
@@ -80,6 +81,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        ensure_role_groups()
         theme, _ = BrandTheme.objects.get_or_create(
             name="Круг движения",
             defaults={

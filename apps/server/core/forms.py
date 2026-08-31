@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import copy
 import math
 import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 
 from django import forms
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 
 from .models import Asset, Channel, Playlist, PlaylistItem, Scene, Screen, Slogan, SloganSet
+from .permissions import ROLE_CHOICES, Role, get_user_role, set_user_role
+
+User = get_user_model()
 
 WEEKDAY_CHOICES = [
     (0, "Пн"),
@@ -223,6 +230,7 @@ class PlaylistItemForm(StyledModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["item_type"].required = False
+        self.fields["scene"].label = "Виджет"
         self.fields["duration_seconds"].required = False
         self.fields["duration_seconds"].help_text = (
             "Фото и сайты — 10 секунд; для видео используется его полная длительность."
@@ -262,7 +270,7 @@ class PlaylistItemForm(StyledModelForm):
         duration_seconds = cleaned.get("duration_seconds")
 
         if bool(asset) == bool(scene):
-            raise forms.ValidationError("Выберите либо контент, либо сцену.")
+            raise forms.ValidationError("Выберите либо контент, либо виджет.")
 
         inferred_type = (
             PlaylistItem.ItemType.ASSET if asset else PlaylistItem.ItemType.SCENE
@@ -306,22 +314,80 @@ class ScreenForm(StyledModelForm):
 
 
 class SceneForm(StyledModelForm):
-    header_subtitle = forms.CharField(label="Подпись в шапке", required=False)
-    header_badge = forms.CharField(label="Метка справа", required=False)
-    kicker = forms.CharField(label="Надзаголовок", required=False)
-    title = forms.CharField(label="Заголовок", required=False)
+    header_subtitle = forms.CharField(label="Подпись в шапке", required=False, max_length=240)
+    header_badge = forms.CharField(label="Метка справа", required=False, max_length=160)
+    kicker = forms.CharField(label="Надзаголовок", required=False, max_length=160)
+    title = forms.CharField(label="Заголовок", required=False, max_length=240)
     text = forms.CharField(
-        label="Основной текст", required=False, widget=forms.Textarea(attrs={"rows": 4})
+        label="Основной текст",
+        required=False,
+        max_length=2000,
+        widget=forms.Textarea(attrs={"rows": 5}),
     )
-    subtitle = forms.CharField(label="Подзаголовок", required=False)
+    subtitle = forms.CharField(label="Подзаголовок", required=False, max_length=240)
+    title_scale = forms.IntegerField(
+        label="Размер главного текста, %",
+        required=False,
+        min_value=50,
+        max_value=160,
+        initial=100,
+        help_text=(
+            "100% — стандартный размер. Допустимо от 50% до 160%. "
+            "Длинный текст обязательно проверьте на экране."
+        ),
+        widget=forms.NumberInput(attrs={"min": 50, "max": 160, "step": 5}),
+    )
+    text_scale = forms.IntegerField(
+        label="Размер основного текста, %",
+        required=False,
+        min_value=50,
+        max_value=160,
+        initial=100,
+        widget=forms.NumberInput(attrs={"min": 50, "max": 160, "step": 5}),
+    )
+    subtitle_scale = forms.IntegerField(
+        label="Размер подписей, %",
+        required=False,
+        min_value=50,
+        max_value=160,
+        initial=100,
+        widget=forms.NumberInput(attrs={"min": 50, "max": 160, "step": 5}),
+    )
 
     class Meta:
         model = Scene
-        fields = ["name", "enabled", "theme", "slogan_set", "weather_source"]
+        fields = [
+            "name",
+            "scene_type",
+            "enabled",
+            "theme",
+            "slogan_set",
+            "weather_source",
+        ]
+        labels = {
+            "scene_type": "Тип",
+            "enabled": "Включён",
+            "theme": "Тема оформления",
+            "slogan_set": "Набор фраз",
+            "weather_source": "Источник погоды",
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         config = self.instance.config or {}
+        supported_types = [
+            choice for choice in Scene.SceneType.choices if choice[0] != Scene.SceneType.PHOTO_MESSAGE
+        ]
+        if self.instance.scene_type == Scene.SceneType.PHOTO_MESSAGE:
+            supported_types.append(
+                (Scene.SceneType.PHOTO_MESSAGE, Scene.SceneType.PHOTO_MESSAGE.label)
+            )
+        self.fields["scene_type"].choices = supported_types
+        if self.instance.pk:
+            self.fields["scene_type"].disabled = True
+            self.fields["scene_type"].help_text = (
+                "Тип существующего виджета не меняется. Создайте новый виджет другого типа."
+            )
         for field_name, key in {
             "header_subtitle": "headerSubtitle",
             "header_badge": "headerBadge",
@@ -331,6 +397,12 @@ class SceneForm(StyledModelForm):
             "subtitle": "subtitle",
         }.items():
             self.fields[field_name].initial = config.get(key, "")
+        for field_name, key in {
+            "title_scale": "titleScale",
+            "text_scale": "textScale",
+            "subtitle_scale": "subtitleScale",
+        }.items():
+            self.fields[field_name].initial = config.get(key, 100)
 
     def save(self, commit=True):
         scene = super().save(commit=False)
@@ -348,11 +420,126 @@ class SceneForm(StyledModelForm):
                 config[key] = value
             else:
                 config.pop(key, None)
+        for field_name, key in {
+            "title_scale": "titleScale",
+            "text_scale": "textScale",
+            "subtitle_scale": "subtitleScale",
+        }.items():
+            config[key] = self.cleaned_data.get(field_name) or 100
         scene.config = config
         if commit:
             scene.save()
             self.save_m2m()
         return scene
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("scene_type") == Scene.SceneType.ANNOUNCEMENT:
+            if not cleaned.get("title", "").strip() and not cleaned.get("text", "").strip():
+                raise forms.ValidationError(
+                    "Для объявления заполните заголовок или основной текст."
+                )
+        return cleaned
+
+
+class UserCreateForm(UserCreationForm):
+    role = forms.ChoiceField(label="Роль", choices=ROLE_CHOICES, initial=Role.USER)
+
+    class Meta(UserCreationForm.Meta):
+        model = User
+        fields = ["username", "first_name", "last_name", "email", "is_active"]
+        labels = {"is_active": "Учётная запись активна"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            current = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = f"field-control {current}".strip()
+        self.fields["is_active"].initial = True
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit:
+            set_user_role(user, self.cleaned_data["role"])
+        return user
+
+
+class UserUpdateForm(forms.ModelForm):
+    role = forms.ChoiceField(label="Роль", choices=ROLE_CHOICES)
+    password1 = forms.CharField(
+        label="Новый пароль",
+        required=False,
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+        help_text="Оставьте пустым, если пароль менять не нужно.",
+    )
+    password2 = forms.CharField(
+        label="Повторите новый пароль",
+        required=False,
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+
+    class Meta:
+        model = User
+        fields = ["username", "first_name", "last_name", "email", "is_active"]
+        labels = {"is_active": "Учётная запись активна"}
+
+    def __init__(self, *args, acting_user=None, **kwargs):
+        self.acting_user = acting_user
+        super().__init__(*args, **kwargs)
+        self.fields["role"].initial = get_user_role(self.instance)
+        if self.instance.is_superuser:
+            self.fields["role"].disabled = True
+            self.fields["role"].help_text = "Суперпользователь всегда является администратором."
+        for field in self.fields.values():
+            current = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = f"field-control {current}".strip()
+
+    def clean(self):
+        cleaned = super().clean()
+        role = cleaned.get("role")
+        is_active = cleaned.get("is_active", False)
+        if self.acting_user and self.instance.pk == self.acting_user.pk:
+            if role != get_user_role(self.instance) or not is_active:
+                raise forms.ValidationError(
+                    "Нельзя отключить собственную учётную запись или изменить собственную роль."
+                )
+
+        current_role = get_user_role(self.instance)
+        if current_role == Role.ADMIN and (role != Role.ADMIN or not is_active):
+            active_admins = User.objects.filter(is_active=True).filter(
+                Q(is_superuser=True) | Q(groups__name="signage_admin")
+            ).distinct()
+            if active_admins.count() <= 1:
+                raise forms.ValidationError("Нельзя отключить или понизить последнего администратора.")
+
+        password1 = cleaned.get("password1", "")
+        password2 = cleaned.get("password2", "")
+        if password1 or password2:
+            if password1 != password2:
+                self.add_error("password2", "Пароли не совпадают.")
+            elif password1:
+                password_user = copy.copy(self.instance)
+                for field_name in ("username", "first_name", "last_name", "email"):
+                    if field_name in cleaned:
+                        setattr(password_user, field_name, cleaned[field_name])
+                try:
+                    validate_password(password1, password_user)
+                except forms.ValidationError as exc:
+                    self.add_error("password1", exc)
+        return cleaned
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        password = self.cleaned_data.get("password1")
+        if password:
+            user.set_password(password)
+        if commit:
+            user.save()
+            if not user.is_superuser:
+                set_user_role(user, self.cleaned_data["role"])
+        return user
 
 
 class SloganSetForm(StyledModelForm):

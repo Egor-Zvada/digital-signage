@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}Пользователь {{ managed_user.username }}{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Администрирование</p><h1>{{ managed_user.username }}</h1><p class="muted">Можно изменить роль, отключить вход или установить новый пароль.</p></div><a class="back-link" href="{% url 'users' %}">← Все пользователи</a></header>
+<section class="panel form-panel"><form method="post" class="stack-form edit-form">{% csrf_token %}{{ form.as_p }}<div class="modal-actions"><a class="button secondary" href="{% url 'users' %}">Отмена</a><button class="button primary">Сохранить</button></div></form></section>
+{% endblock %}

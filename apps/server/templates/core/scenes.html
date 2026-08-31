@@ -1,9 +1,12 @@
 {% extends 'base.html' %}
-{% block title %}Сцены{% endblock %}
+{% block title %}Виджеты{% endblock %}
 {% block content %}
-<header class="page-header"><div><p class="eyebrow">Встроенные виджеты</p><h1>Фирменные сцены</h1><p class="muted">Часы, погода, заставка, объявление и другие экраны без подготовки картинок.</p></div></header>
-<section class="panel"><div class="table-wrap"><table><thead><tr><th>Сцена</th><th>Тип</th><th>Состояние</th><th>В плейлистах</th><th></th></tr></thead><tbody>
-{% for scene in scenes %}<tr><td><strong>{{ scene.name }}</strong></td><td>{{ scene.get_scene_type_display }}</td><td><span class="badge {% if scene.enabled %}ready{% else %}unknown{% endif %}">{% if scene.enabled %}Включена{% else %}Выключена{% endif %}</span></td><td>{{ scene.playlist_items.count }}</td><td><a class="button ghost" href="{% url 'scene_edit' scene.id %}">Изменить</a></td></tr>
-{% empty %}<tr><td colspan="5" class="empty">Сцен пока нет.</td></tr>{% endfor %}
+<header class="page-header">
+  <div><p class="eyebrow">Встроенные виджеты</p><h1>Виджеты</h1><p class="muted">Создавайте отдельные часы, погоду, заставки, фразы и любое количество объявлений.</p></div>
+  <div class="page-actions"><a class="button secondary" href="{% url 'widget_create' %}?type=announcement">Новое объявление</a><a class="button primary" href="{% url 'widget_create' %}">Создать виджет</a></div>
+</header>
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Виджет</th><th>Тип</th><th>Состояние</th><th>В плейлистах</th><th></th></tr></thead><tbody>
+{% for scene in scenes %}<tr><td><strong>{{ scene.name }}</strong></td><td>{{ scene.get_scene_type_display }}</td><td><span class="badge {% if scene.enabled %}ready{% else %}unknown{% endif %}">{% if scene.enabled %}Включён{% else %}Выключен{% endif %}</span></td><td>{{ scene.playlist_items.count }}</td><td><div class="command-row"><a class="button ghost" href="{% url 'widget_edit' scene.id %}">Изменить</a><form method="post" action="{% url 'widget_delete' scene.id %}" data-confirm="Удалить виджет? Его нельзя восстановить.">{% csrf_token %}<button class="button danger ghost">Удалить</button></form></div></td></tr>
+{% empty %}<tr><td colspan="5" class="empty">Виджетов пока нет.</td></tr>{% endfor %}
 </tbody></table></div></section>
 {% endblock %}

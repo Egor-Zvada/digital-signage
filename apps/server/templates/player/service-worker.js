@@ -1,19 +1,19 @@
 'use strict';
 
-const WORKER_VERSION = '0.3.1';
+const WORKER_VERSION = '0.4.0';
 const scopeUrl = new URL(self.registration.scope);
 const scopeParts = scopeUrl.pathname.split('/').filter(Boolean);
 const screenKey = (scopeParts.at(-2) || 'screen').replace(/[^a-zA-Z0-9-]/g, '');
 const playerUrl = new URL('./', scopeUrl).href;
 const manifestUrl = new URL('manifest.json', scopeUrl).href;
 const metaUrl = new URL('__offline_meta__', scopeUrl).href;
-const shellCache = `signage-shell-${screenKey}-v4`;
+const shellCache = `signage-shell-${screenKey}-v5`;
 const metaCache = `signage-meta-${screenKey}-v2`;
 const mediaPrefix = `signage-media-${screenKey}-v2-r`;
 const shellAssets = [
   playerUrl,
-  new URL('/static/css/player.css?v=0.3.1', scopeUrl).href,
-  new URL('/static/js/player.js?v=0.3.1', scopeUrl).href,
+  new URL('/static/css/player.css?v=0.4.0', scopeUrl).href,
+  new URL('/static/js/player.js?v=0.4.0', scopeUrl).href,
   new URL('/static/brand/school-logo.png', scopeUrl).href,
 ];
 let stagingPromise = null;

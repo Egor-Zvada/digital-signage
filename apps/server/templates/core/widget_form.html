@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}{{ kind }}{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Виджеты</p><h1>{% if is_create %}Создать виджет{% else %}{{ object.name }}{% endif %}</h1><p class="muted">Размеры задаются в процентах и одинаково масштабируются на Full HD и 4K.</p></div><a class="back-link" href="{% url 'widgets' %}">← Все виджеты</a></header>
+<form method="post" class="widget-editor" data-widget-editor>{% csrf_token %}
+  {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+  <section class="panel form-section">
+    <div class="panel-heading"><div><p class="eyebrow">Основное</p><h2>Тип и название</h2></div></div>
+    <div class="form-grid form-section-body">
+      <div class="field-group">{{ form.name.label_tag }}{{ form.name }}{{ form.name.errors }}</div>
+      <div class="field-group">{{ form.scene_type.label_tag }}{{ form.scene_type }}{% if form.scene_type.help_text %}<small class="helptext">{{ form.scene_type.help_text }}</small>{% endif %}{{ form.scene_type.errors }}</div>
+      <div class="field-group">{{ form.enabled.label_tag }}{{ form.enabled }}{{ form.enabled.errors }}</div>
+      <div class="field-group">{{ form.theme.label_tag }}{{ form.theme }}{{ form.theme.errors }}</div>
+    </div>
+  </section>
+  <section class="panel form-section">
+    <div class="panel-heading"><div><p class="eyebrow">Содержимое</p><h2>Текст и источники</h2></div></div>
+    <div class="form-grid form-section-body">
+      <div class="field-group" data-widget-types="slogan">{{ form.slogan_set.label_tag }}{{ form.slogan_set }}{{ form.slogan_set.errors }}</div>
+      <div class="field-group" data-widget-types="weather clock_weather">{{ form.weather_source.label_tag }}{{ form.weather_source }}{{ form.weather_source.errors }}</div>
+      <div class="field-group" data-widget-types="identity clock weather clock_weather slogan announcement">{{ form.header_subtitle.label_tag }}{{ form.header_subtitle }}{{ form.header_subtitle.errors }}</div>
+      <div class="field-group" data-widget-types="identity clock weather clock_weather slogan announcement">{{ form.header_badge.label_tag }}{{ form.header_badge }}{{ form.header_badge.errors }}</div>
+      <div class="field-group" data-widget-types="identity announcement">{{ form.kicker.label_tag }}{{ form.kicker }}{{ form.kicker.errors }}</div>
+      <div class="field-group" data-widget-types="announcement">{{ form.title.label_tag }}{{ form.title }}{{ form.title.errors }}</div>
+      <div class="field-group wide-field" data-widget-types="announcement">{{ form.text.label_tag }}{{ form.text }}{{ form.text.errors }}</div>
+      <div class="field-group" data-widget-types="identity slogan announcement">{{ form.subtitle.label_tag }}{{ form.subtitle }}{{ form.subtitle.errors }}</div>
+    </div>
+  </section>
+  <section class="panel form-section">
+    <div class="panel-heading"><div><p class="eyebrow">Оформление</p><h2>Размер текста</h2></div><span class="count-pill">50–160%</span></div>
+    <div class="form-grid form-section-body three-columns">
+      <div class="field-group" data-widget-types="identity clock weather clock_weather slogan announcement photo_message">{{ form.title_scale.label_tag }}{{ form.title_scale }}{% if form.title_scale.help_text %}<small class="helptext">{{ form.title_scale.help_text }}</small>{% endif %}{{ form.title_scale.errors }}</div>
+      <div class="field-group" data-widget-types="identity weather clock_weather announcement photo_message">{{ form.text_scale.label_tag }}{{ form.text_scale }}{{ form.text_scale.errors }}</div>
+      <div class="field-group" data-widget-types="identity clock weather clock_weather slogan announcement">{{ form.subtitle_scale.label_tag }}{{ form.subtitle_scale }}{{ form.subtitle_scale.errors }}</div>
+    </div>
+  </section>
+  <div class="editor-actions"><a class="button secondary" href="{% url 'widgets' %}">Отмена</a><button class="button primary">{% if is_create %}Создать виджет{% else %}Сохранить{% endif %}</button></div>
+</form>
+{% endblock %}

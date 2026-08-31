@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.3.1-browser';
+  const VERSION = '0.4.0-browser';
   const root = document.getElementById('signage-player');
   const stage = document.getElementById('stage');
   const empty = document.getElementById('empty-state');
@@ -28,6 +28,14 @@
   const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
   const logoUrl = (path) => `/static/${String(path || 'brand/school-logo.png').replace(/^\/+/, '')}`;
   const fitClass = (fit) => `fit-${['cover','contain','stretch'].includes(fit) ? fit : 'cover'}`;
+  const textScale = (value) => Math.min(1.6, Math.max(.5, (Number(value) || 100) / 100));
+
+  function sceneScaleStyle(config) {
+    const title = textScale(config?.titleScale);
+    const text = textScale(config?.textScale);
+    const subtitle = textScale(config?.subtitleScale);
+    return `style="--title-scale:${title};--text-scale:${text};--subtitle-scale:${subtitle}"`;
+  }
 
   function localParts(timestamp, timezone) {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -120,11 +128,11 @@
       const slogan = selectedSlogan(scene);
       body = `<div class="slogan-layout"><div class="slogan-text">${esc(slogan.text)}</div><div class="slogan-subtitle">${esc(slogan.subtitle || config.subtitle || 'Тренируйся. Уважай. Расти.')}</div></div>`;
     } else if (scene.type === 'announcement') {
-      body = `<div class="announcement-layout"><span class="announcement-kicker">${esc(config.kicker || 'Объявление')}</span><h1>${esc(config.title || 'Информационное сообщение')}</h1><p>${esc(config.text || 'Текст объявления настраивается в панели управления.')}</p></div>`;
+      body = `<div class="announcement-layout"><span class="announcement-kicker">${esc(config.kicker || 'Объявление')}</span>${config.title ? `<h1>${esc(config.title)}</h1>` : ''}${config.text ? `<p>${esc(config.text)}</p>` : ''}${config.subtitle ? `<div class="announcement-subtitle">${esc(config.subtitle)}</div>` : ''}</div>`;
     } else if (scene.type === 'photo_message') {
       body = `${config.imageUrl ? `<img class="photo-message-bg" src="${esc(config.imageUrl)}" alt="">` : ''}<div class="photo-message-shade"></div><div class="photo-message-copy"><h1>${esc(config.title || 'Сила характера начинается с дисциплины')}</h1><p>${esc(config.text || '')}</p></div>`;
     }
-    return `<article class="stage-item brand-scene">${base}${body}</article>`;
+    return `<article class="stage-item brand-scene" ${sceneScaleStyle(config)}>${base}${body}</article>`;
   }
 
   function renderAsset(item, elapsed) {

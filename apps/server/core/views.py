@@ -6,9 +6,10 @@ from pathlib import PurePosixPath
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Q, Sum
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -25,6 +26,8 @@ from .forms import (
     SceneForm,
     ScreenForm,
     SloganForm,
+    UserCreateForm,
+    UserUpdateForm,
 )
 from .models import (
     Asset,
@@ -39,8 +42,41 @@ from .models import (
     SloganSet,
     WorkerJob,
 )
+from .permissions import ROLE_LABELS, Role, get_user_role, role_at_least, role_required
 from .player_auth import screen_token_required
 from .services.manifest import PublicationError, publish_channel
+from .services.system_status import collect_system_status
+from .wiki_content import WIKI_ARTICLES, WIKI_BY_SLUG
+
+User = get_user_model()
+
+AUDIT_LABELS = {
+    "asset.created": "Добавлен контент",
+    "asset.updated": "Изменён контент",
+    "asset.enabled": "Включён контент",
+    "asset.disabled": "Выключен контент",
+    "asset.deleted": "Удалён контент",
+    "playlist.created": "Создан плейлист",
+    "playlist.updated": "Изменён плейлист",
+    "playlist.item_added": "Добавлен элемент плейлиста",
+    "playlist.item_updated": "Изменён элемент плейлиста",
+    "playlist.item_deleted": "Удалён элемент плейлиста",
+    "playlist.reordered": "Изменён порядок плейлиста",
+    "channel.created": "Создан канал",
+    "channel.updated": "Изменён канал",
+    "channel.published": "Опубликован канал",
+    "screen.created": "Создан экран",
+    "screen.updated": "Изменён экран",
+    "screen.command": "Отправлена команда экрану",
+    "scene.created": "Создан виджет",
+    "scene.updated": "Изменён виджет",
+    "scene.deleted": "Удалён виджет",
+    "slogan.created": "Добавлена фраза",
+    "slogan.updated": "Изменена фраза",
+    "slogan.deleted": "Удалена фраза",
+    "user.created": "Создан пользователь",
+    "user.updated": "Изменён пользователь",
+}
 
 
 def _client_ip(request: HttpRequest) -> str | None:
@@ -68,14 +104,30 @@ def healthz(_request: HttpRequest) -> JsonResponse:
 def dashboard(request: HttpRequest) -> HttpResponse:
     now = timezone.now()
     online_after = now - timedelta(seconds=90)
+    assets = Asset.objects.filter(deleted_at__isnull=True)
+    operational_access = role_at_least(request.user, Role.MODERATOR)
+    recent_events = []
+    if operational_access:
+        recent_events = list(AuditEvent.objects.select_related("actor")[:5])
+        for event in recent_events:
+            event.display_action = AUDIT_LABELS.get(event.action, event.action)
     context = {
-        "assets_count": Asset.objects.filter(deleted_at__isnull=True).count(),
+        "assets_count": assets.count(),
         "playlists_count": Playlist.objects.count(),
         "channels_count": Channel.objects.count(),
         "screens_count": Screen.objects.count(),
         "screens_online": Screen.objects.filter(last_seen_at__gte=online_after).count(),
         "screens": Screen.objects.select_related("channel").order_by("name")[:10],
-        "recent_events": AuditEvent.objects.select_related("actor")[:10],
+        "recent_events": recent_events,
+        "operational_access": operational_access,
+        "system": collect_system_status() if operational_access else None,
+        "content_ready": assets.filter(status=Asset.Status.READY).count(),
+        "content_processing": assets.filter(status=Asset.Status.PROCESSING).count(),
+        "content_failed": assets.filter(status=Asset.Status.FAILED).count(),
+        "content_bytes": assets.aggregate(total=Sum("file_size"))["total"] or 0,
+        "jobs_waiting": WorkerJob.objects.filter(
+            status__in=[WorkerJob.Status.QUEUED, WorkerJob.Status.RUNNING]
+        ).count(),
     }
     return render(request, "core/dashboard.html", context)
 
@@ -280,7 +332,7 @@ def playlist_item_delete(request: HttpRequest, item_id: int) -> HttpResponse:
     return redirect("playlist_edit", playlist_id=playlist_id)
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def channel_list(request: HttpRequest) -> HttpResponse:
     form = ChannelForm(request.POST or None)
@@ -293,7 +345,7 @@ def channel_list(request: HttpRequest) -> HttpResponse:
     return render(request, "core/channels.html", {"channels": channels, "form": form})
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def channel_edit(request: HttpRequest, channel_id: int) -> HttpResponse:
     channel = get_object_or_404(Channel, pk=channel_id)
@@ -308,7 +360,7 @@ def channel_edit(request: HttpRequest, channel_id: int) -> HttpResponse:
     )
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_POST
 def channel_publish(request: HttpRequest, channel_id: int) -> HttpResponse:
     channel = get_object_or_404(Channel, pk=channel_id)
@@ -322,7 +374,7 @@ def channel_publish(request: HttpRequest, channel_id: int) -> HttpResponse:
     return redirect("channels")
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def screen_list(request: HttpRequest) -> HttpResponse:
     form = ScreenForm(request.POST or None)
@@ -345,7 +397,7 @@ def screen_list(request: HttpRequest) -> HttpResponse:
     )
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def screen_edit(request: HttpRequest, screen_id) -> HttpResponse:
     screen = get_object_or_404(Screen, pk=screen_id)
@@ -360,7 +412,7 @@ def screen_edit(request: HttpRequest, screen_id) -> HttpResponse:
     )
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_POST
 def screen_command(request: HttpRequest, screen_id) -> HttpResponse:
     screen = get_object_or_404(Screen, pk=screen_id)
@@ -386,7 +438,7 @@ def screen_command(request: HttpRequest, screen_id) -> HttpResponse:
     return redirect("screens")
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def slogans(request: HttpRequest) -> HttpResponse:
     slogan_set = SloganSet.objects.first()
@@ -407,7 +459,7 @@ def slogans(request: HttpRequest) -> HttpResponse:
     )
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
 def slogan_edit(request: HttpRequest, slogan_id: int) -> HttpResponse:
     slogan = get_object_or_404(Slogan, pk=slogan_id)
@@ -422,7 +474,7 @@ def slogan_edit(request: HttpRequest, slogan_id: int) -> HttpResponse:
     )
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_POST
 def slogan_toggle(request: HttpRequest, slogan_id: int) -> HttpResponse:
     slogan = get_object_or_404(Slogan, pk=slogan_id)
@@ -432,7 +484,7 @@ def slogan_toggle(request: HttpRequest, slogan_id: int) -> HttpResponse:
     return redirect("slogans")
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_POST
 def slogan_move(request: HttpRequest, slogan_id: int) -> HttpResponse:
     slogan = get_object_or_404(Slogan, pk=slogan_id)
@@ -454,7 +506,7 @@ def slogan_move(request: HttpRequest, slogan_id: int) -> HttpResponse:
     return redirect("slogans")
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_POST
 def slogan_delete(request: HttpRequest, slogan_id: int) -> HttpResponse:
     slogan = get_object_or_404(Slogan, pk=slogan_id)
@@ -464,24 +516,151 @@ def slogan_delete(request: HttpRequest, slogan_id: int) -> HttpResponse:
     return redirect("slogans")
 
 
-@login_required
-def scene_list(request: HttpRequest) -> HttpResponse:
+@role_required(Role.MODERATOR)
+def widget_list(request: HttpRequest) -> HttpResponse:
     scenes = Scene.objects.select_related("theme", "slogan_set", "weather_source").order_by("name")
     return render(request, "core/scenes.html", {"scenes": scenes})
 
 
-@login_required
+@role_required(Role.MODERATOR)
 @require_http_methods(["GET", "POST"])
-def scene_edit(request: HttpRequest, scene_id: int) -> HttpResponse:
+def widget_create(request: HttpRequest) -> HttpResponse:
+    initial = {}
+    requested_type = request.GET.get("type", "")
+    supported_types = {
+        value
+        for value in Scene.SceneType.values
+        if value != Scene.SceneType.PHOTO_MESSAGE
+    }
+    if requested_type in supported_types:
+        initial["scene_type"] = requested_type
+    form = SceneForm(request.POST or None, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        scene = form.save()
+        _audit(request, "scene.created", scene, {"type": scene.scene_type})
+        messages.success(
+            request,
+            "Виджет создан. Добавьте его в плейлист и опубликуйте канал.",
+        )
+        return redirect("widgets")
+    return render(
+        request,
+        "core/widget_form.html",
+        {"form": form, "kind": "Новый виджет", "is_create": True},
+    )
+
+
+@role_required(Role.MODERATOR)
+@require_http_methods(["GET", "POST"])
+def widget_edit(request: HttpRequest, scene_id: int) -> HttpResponse:
     scene = get_object_or_404(Scene, pk=scene_id)
     form = SceneForm(request.POST or None, instance=scene)
     if request.method == "POST" and form.is_valid():
         scene = form.save()
         _audit(request, "scene.updated", scene)
-        messages.success(request, "Сцена изменена. Опубликуйте канал для применения.")
-        return redirect("scenes")
+        messages.success(request, "Виджет изменён. Опубликуйте канал для применения.")
+        return redirect("widgets")
     return render(
-        request, "core/edit_form.html", {"form": form, "object": scene, "kind": "Сцена"}
+        request,
+        "core/widget_form.html",
+        {"form": form, "object": scene, "kind": "Виджет", "is_create": False},
+    )
+
+
+@role_required(Role.MODERATOR)
+@require_POST
+def widget_delete(request: HttpRequest, scene_id: int) -> HttpResponse:
+    scene = get_object_or_404(Scene, pk=scene_id)
+    if scene.playlist_items.exists():
+        messages.error(request, "Сначала удалите виджет из всех плейлистов.")
+    else:
+        _audit(request, "scene.deleted", scene, {"name": scene.name})
+        scene.delete()
+        messages.success(request, "Виджет удалён.")
+    return redirect("widgets")
+
+
+@login_required
+def wiki_index(request: HttpRequest) -> HttpResponse:
+    query = request.GET.get("q", "").strip().lower()
+    articles = WIKI_ARTICLES
+    if query:
+        articles = [
+            article
+            for article in WIKI_ARTICLES
+            if query in article["title"].lower() or query in article["summary"].lower()
+        ]
+    return render(request, "core/wiki_index.html", {"articles": articles, "query": query})
+
+
+@login_required
+def wiki_article(request: HttpRequest, slug: str) -> HttpResponse:
+    article = WIKI_BY_SLUG.get(slug)
+    if not article:
+        raise Http404("Статья не найдена")
+    return render(
+        request,
+        "core/wiki_article.html",
+        {"article": article, "articles": WIKI_ARTICLES},
+    )
+
+
+@role_required(Role.ADMIN)
+@require_http_methods(["GET", "POST"])
+def user_list(request: HttpRequest) -> HttpResponse:
+    form = UserCreateForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        user = form.save()
+        _audit(
+            request,
+            "user.created",
+            user,
+            {"username": user.username, "role": get_user_role(user)},
+        )
+        messages.success(request, f"Пользователь {user.username} создан.")
+        return redirect("users")
+    users = User.objects.prefetch_related("groups").order_by("username")
+    if not request.user.is_superuser:
+        users = users.filter(is_superuser=False)
+    rows = [
+        {"user": user, "role": get_user_role(user), "role_label": ROLE_LABELS[get_user_role(user)]}
+        for user in users
+    ]
+    return render(request, "core/users.html", {"rows": rows, "form": form})
+
+
+@role_required(Role.ADMIN)
+@require_http_methods(["GET", "POST"])
+def user_edit(request: HttpRequest, user_id: int) -> HttpResponse:
+    queryset = User.objects.all()
+    if not request.user.is_superuser:
+        queryset = queryset.filter(is_superuser=False)
+    user = get_object_or_404(queryset, pk=user_id)
+    old_role = get_user_role(user)
+    old_active = user.is_active
+    form = UserUpdateForm(request.POST or None, instance=user, acting_user=request.user)
+    if request.method == "POST" and form.is_valid():
+        password_changed = bool(form.cleaned_data.get("password1"))
+        user = form.save()
+        _audit(
+            request,
+            "user.updated",
+            user,
+            {
+                "username": user.username,
+                "oldRole": old_role,
+                "role": get_user_role(user),
+                "oldActive": old_active,
+                "active": user.is_active,
+                "passwordChanged": password_changed,
+            },
+        )
+        messages.success(request, "Пользователь изменён.")
+        return redirect("users")
+    return render(
+        request,
+        "core/user_edit.html",
+        {"form": form, "managed_user": user},
     )
 
 
