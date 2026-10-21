@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.4.0-browser';
+  const VERSION = '0.5.0-browser';
   const root = document.getElementById('signage-player');
   const stage = document.getElementById('stage');
   const empty = document.getElementById('empty-state');
@@ -15,10 +15,17 @@
   let clockTimer = null;
   let activeNode = null;
   let activeKey = '';
-  let currentIndex = 0;
   let serverOffsetMs = 0;
   let lastError = '';
-  let forcedIndex = null;
+  const queue = new window.SignagePlayback.PlaybackQueue();
+  const monotonic = () => performance.now();
+  const sloganStarted = monotonic();
+  const sessionId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const sessionStartedAt = new Date().toISOString();
+  let connected = null;
+  let offlineStatus = {state: 'unknown', completed: 0, total: 0};
+  const handledCommands = new Set();
+  let heartbeatLoading = false;
   let globalMuted = false;
   let globalVolume = 1;
   let manifestLoading = false;
@@ -29,6 +36,14 @@
   const logoUrl = (path) => `/static/${String(path || 'brand/school-logo.png').replace(/^\/+/, '')}`;
   const fitClass = (fit) => `fit-${['cover','contain','stretch'].includes(fit) ? fit : 'cover'}`;
   const textScale = (value) => Math.min(1.6, Math.max(.5, (Number(value) || 100) / 100));
+  const timezoneCache = new Map();
+  function safeTimezone(value) {
+    if (!timezoneCache.has(value)) {
+      try { new Intl.DateTimeFormat('ru-RU', {timeZone:value}).format(); timezoneCache.set(value,value); }
+      catch (_) { timezoneCache.set(value,'Asia/Sakhalin'); }
+    }
+    return timezoneCache.get(value);
+  }
 
   function sceneScaleStyle(config) {
     const title = textScale(config?.titleScale);
@@ -39,7 +54,7 @@
 
   function localParts(timestamp, timezone) {
     const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+      timeZone: safeTimezone(timezone), weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
     }).formatToParts(new Date(timestamp));
     return Object.fromEntries(parts.map((part) => [part.type, part.value]));
   }
@@ -60,27 +75,8 @@
     return true;
   }
 
-  function currentSlot(items) {
-    if (!items.length) return null;
-    if (forcedIndex !== null) {
-      const index = ((forcedIndex % items.length) + items.length) % items.length;
-      return {item: items[index], index, elapsed: 0, remaining: items[index].durationMs};
-    }
-    const total = items.reduce((sum, item) => sum + Math.max(1000, item.durationMs), 0);
-    const epoch = Date.parse(manifest.screen?.timelineEpoch || manifest.timelineEpoch || manifest.generatedAt);
-    const timelinePosition = now() - epoch;
-    const cycle = Math.floor(timelinePosition / total);
-    let phase = (timelinePosition % total + total) % total;
-    for (let index = 0; index < items.length; index += 1) {
-      const duration = Math.max(1000, items[index].durationMs);
-      if (phase < duration) return {item: items[index], index, elapsed: phase, remaining: duration - phase, cycle};
-      phase -= duration;
-    }
-    return {item: items[0], index: 0, elapsed: 0, remaining: items[0].durationMs, cycle};
-  }
-
   function activeItems() {
-    const timezone = manifest?.channel?.timezone || 'Asia/Sakhalin';
+    const timezone = safeTimezone(manifest?.channel?.timezone || 'Asia/Sakhalin');
     return (manifest?.items || []).filter((item) => scheduleActive(item.schedule, timezone));
   }
 
@@ -105,9 +101,13 @@
   function selectedSlogan(scene) {
     const items = (scene.slogans?.items || []).filter((item) => scheduleActive(item.schedule, manifest.channel.timezone));
     if (!items.length) return {text: scene.config?.text || 'Дисциплина превращает движение в мастерство.', subtitle: scene.config?.subtitle || ''};
-    const epoch = Date.parse(manifest.screen?.timelineEpoch || manifest.timelineEpoch);
-    const slot = Math.floor((now() - epoch) / ((items[0].durationSeconds || 10) * 1000));
-    return items[((slot % items.length) + items.length) % items.length];
+    const total = items.reduce((sum, item) => sum + (item.durationSeconds || 10) * 1000, 0);
+    let phase = (monotonic() - sloganStarted) % total;
+    for (const item of items) {
+      phase -= (item.durationSeconds || 10) * 1000;
+      if (phase < 0) return item;
+    }
+    return items[0];
   }
 
   function renderScene(item) {
@@ -119,7 +119,7 @@
     if (scene.type === 'identity') {
       body = `<div class="identity-content"><p>${esc(config.kicker || 'Сахалинская область')}</p><h1>${esc(scene.theme.fullName || scene.theme.shortName)}</h1><span>${esc(config.subtitle || 'Каратэ · Фехтование · Дисциплина · Уважение')}</span></div>`;
     } else if (scene.type === 'clock') {
-      body = `<div class="clock-layout"><div class="clock-value"></div><div class="date-value"></div><span class="timezone-pill">Сахалинское время · Asia/Sakhalin</span></div>`;
+      body = `<div class="clock-layout"><div class="clock-value"></div><div class="date-value"></div><span class="timezone-pill">${esc(manifest.channel?.timezone || 'Asia/Sakhalin')}</span></div>`;
     } else if (scene.type === 'weather') {
       body = `<div class="weather-layout"><div class="weather-place">${esc(weather.location || 'Южно-Сахалинск')}</div><div class="weather-temp">${Math.round(weather.temperature ?? 0)}°</div><div class="weather-symbol">${weatherSymbol(weather.weatherCode, weather.isDay)}</div><div class="weather-summary">${esc(weather.condition || 'Получаем данные о погоде')}</div><div class="weather-details"><span>Ощущается как ${Math.round(weather.apparentTemperature ?? 0)}°</span><span>Ветер ${Math.round(weather.windSpeed ?? 0)} км/ч</span><span>Влажность ${Math.round(weather.humidity ?? 0)}%</span></div></div>`;
     } else if (scene.type === 'clock_weather') {
@@ -132,7 +132,7 @@
     } else if (scene.type === 'photo_message') {
       body = `${config.imageUrl ? `<img class="photo-message-bg" src="${esc(config.imageUrl)}" alt="">` : ''}<div class="photo-message-shade"></div><div class="photo-message-copy"><h1>${esc(config.title || 'Сила характера начинается с дисциплины')}</h1><p>${esc(config.text || '')}</p></div>`;
     }
-    return `<article class="stage-item brand-scene" ${sceneScaleStyle(config)}>${base}${body}</article>`;
+    return `<article class="stage-item brand-scene" data-scene-type="${esc(scene.type)}" ${sceneScaleStyle(config)}>${base}${body}</article>`;
   }
 
   function renderAsset(item, elapsed) {
@@ -144,13 +144,21 @@
   }
 
   function updateClock(node) {
-    const timezone = manifest?.channel?.timezone || 'Asia/Sakhalin';
+    const timezone = safeTimezone(manifest?.channel?.timezone || 'Asia/Sakhalin');
     const date = new Date(now());
     const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:timezone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(date);
     const formattedDate = new Intl.DateTimeFormat('ru-RU', {timeZone:timezone,weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(date);
     node.querySelectorAll('.clock-value').forEach((element) => element.textContent = clock);
     node.querySelectorAll('.date-value').forEach((element) => element.textContent = formattedDate[0].toUpperCase() + formattedDate.slice(1));
     node.querySelectorAll('.footer-time').forEach((element) => element.textContent = `${formattedDate} · ${clock.slice(0,5)} · ${timezone}`);
+    if (node.dataset.sceneType === 'slogan') {
+      const scene = queue.items[queue.index]?.scene;
+      if (scene) {
+        const slogan = selectedSlogan(scene);
+        node.querySelector('.slogan-text').textContent = slogan.text;
+        node.querySelector('.slogan-subtitle').textContent = slogan.subtitle || scene.config?.subtitle || '';
+      }
+    }
   }
 
   function videoShouldBeMuted(item) {
@@ -165,18 +173,20 @@
 
   async function startVideo(video, item, elapsed, node) {
     if (!node.isConnected) return;
-    const target = Math.min(elapsed / 1000, Math.max(0, video.duration - .2));
+    const target = 0;
     if (Number.isFinite(target)) video.currentTime = target;
     video.muted = videoShouldBeMuted(item);
     applyVideoVolume(video, item);
     try {
       await video.play();
+      if (activeNode === node) { queue.started = monotonic(); schedulePlayback(); }
       if (!video.muted && lastError.startsWith('Звук заблокирован')) lastError = '';
     } catch (error) {
       if (error.name === 'NotAllowedError' && !video.muted) {
         video.muted = true;
         try {
           await video.play();
+          if (activeNode === node) { queue.started = monotonic(); schedulePlayback(); }
           lastError = 'Звук заблокирован браузером · видео воспроизводится без звука';
           return;
         } catch (mutedError) {
@@ -189,8 +199,7 @@
   }
 
   function showSlot(slot) {
-    currentIndex = slot.index;
-    const signature = `${manifest.revision}:${slot.item.key}:${forcedIndex ?? `cycle-${slot.cycle}`}`;
+    const signature = `${manifest.channel?.id}:${manifest.revision}:${slot.item.key}:${slot.serial}`;
     if (signature === activeKey) return;
     activeKey = signature;
     clearInterval(clockTimer);
@@ -205,67 +214,111 @@
     }
     const video = node.querySelector('video');
     if (video) {
+      video.dataset.lastProgress = String(monotonic());
+      video.addEventListener('timeupdate', () => { video.dataset.lastProgress = String(monotonic()); });
       const begin = () => startVideo(video, slot.item, slot.elapsed, node);
       if (video.readyState >= 1) begin();
       else video.addEventListener('loadedmetadata', begin, {once:true});
-      video.addEventListener('error', () => { lastError = 'Не удалось воспроизвести видео'; });
+      video.addEventListener('error', () => { lastError = 'Не удалось воспроизвести видео'; skipBrokenItem(node); });
       video.addEventListener('playing', () => {
         if (!video.muted && lastError.startsWith('Звук заблокирован')) lastError = '';
         if (lastError.startsWith('Видео:') || lastError === 'Не удалось воспроизвести видео') lastError = '';
       });
-      video.addEventListener('ended', () => setTimeout(() => {
-        if (activeNode === node && video.ended) {
-          activeKey = '';
-          schedulePlayback();
-        }
-      }, 250), {once:true});
+      video.addEventListener('ended', () => {
+        if (activeNode === node) { queue.advance(monotonic()); schedulePlayback(); }
+      }, {once:true});
     }
     const image = node.querySelector('img.fit-cover,img.fit-contain,img.fit-stretch');
-    if (image) image.addEventListener('error', () => { lastError = 'Не удалось загрузить изображение'; });
+    if (image) image.addEventListener('error', () => { lastError = 'Не удалось загрузить изображение'; skipBrokenItem(node); });
     empty.classList.add('hidden');
     const previous = activeNode;
     activeNode = node;
-    setTimeout(() => previous?.remove(), 420);
+    previous?.querySelectorAll('video').forEach((old) => old.pause());
+    setTimeout(() => {
+      previous?.querySelectorAll('video').forEach((old) => { old.pause(); old.removeAttribute('src'); old.load(); });
+      previous?.remove();
+    }, 420);
+  }
+
+  function skipBrokenItem(node) {
+    setTimeout(() => {
+      if (activeNode === node) { queue.advance(monotonic()); schedulePlayback(); }
+    }, 2000);
+  }
+
+  function resetPlayback() {
+    queue.restart(monotonic());
+    activeKey = '';
+    schedulePlayback();
   }
 
   function schedulePlayback() {
     clearTimeout(timer);
     if (!manifest) return;
     const items = activeItems();
+    queue.update(items, monotonic());
     if (!items.length) {
+      activeNode?.querySelectorAll('video').forEach((video) => video.pause());
+      activeNode?.remove(); activeNode = null; activeKey = '';
+      clearInterval(clockTimer);
       empty.classList.remove('hidden');
       bootDetail.textContent = manifest.revision ? 'Сейчас нет активного контента по расписанию' : 'Канал ещё не опубликован';
       timer = setTimeout(schedulePlayback, 5000);
       return;
     }
-    const slot = currentSlot(items);
+    let slot = queue.current(monotonic());
+    if (slot.remaining <= 0) {
+      const video = activeNode?.querySelector('video');
+      const playingKey = `${manifest.channel?.id}:${manifest.revision}:${slot.item.key}:${slot.serial}`;
+      // A brief buffering pause must not truncate the end of a video.
+      const videoStillRunning = activeKey === playingKey && video && !video.ended && !video.error
+        && monotonic() - Number(video.dataset.lastProgress || 0) < 30000;
+      if (videoStillRunning) { timer = setTimeout(schedulePlayback, 500); return; }
+      queue.advance(monotonic()); slot = queue.current(monotonic());
+    }
     showSlot(slot);
-    forcedIndex = null;
-    timer = setTimeout(schedulePlayback, Math.max(150, slot.remaining + 20));
+    // Check schedules while a long video is playing as well as at slot boundaries.
+    timer = setTimeout(schedulePlayback, Math.min(1000, Math.max(100, slot.remaining + 10)));
   }
 
   async function loadManifest() {
     if (manifestLoading) return;
     manifestLoading = true;
     try {
-      const response = await fetch(manifestUrl, {cache:'no-store',headers:etag ? {'If-None-Match':etag} : {}});
+      const response = await fetch(manifestUrl, {cache:'no-store',signal:AbortSignal.timeout(12000),headers:etag ? {'If-None-Match':etag} : {}});
       const offline = response.headers.get('X-Signage-Offline') === '1';
-      if (response.status === 304) { if (!offline) connectionState.hidden = true; return; }
+      if (response.status === 304) {
+        if (!offline) {
+          if (connected === false) resetPlayback();
+          connected = true; connectionState.hidden = true;
+          if (lastError.startsWith('Нет связи с сервером') || lastError.startsWith('Связь:')) lastError = '';
+        }
+        return;
+      }
+      if (response.status === 403 || response.status === 404) {
+        manifest = null; queue.update([], monotonic(), true); clearTimeout(timer); clearInterval(clockTimer);
+        stage.replaceChildren(); activeNode = null; activeKey = ''; empty.classList.remove('hidden');
+        bootDetail.textContent = 'Экран отключён или ссылка отозвана';
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const next = await response.json();
       etag = response.headers.get('ETag') || '';
       if (next.serverTime && !offline) serverOffsetMs = Date.parse(next.serverTime) - Date.now();
-      const changed = !manifest || next.revision !== manifest.revision;
+      const changed = !manifest || next.revision !== manifest.revision || next.channel?.id !== manifest.channel?.id;
+      const reconnected = connected === false && !offline;
       manifest = next;
+      connected = !offline;
       if (!volumeOverridden) {
         globalVolume = Math.min(1, Math.max(0, (manifest.channel?.defaultVolume ?? 100) / 100));
       }
       connectionState.hidden = !offline;
       if (offline) lastError = 'Нет связи с сервером · показ из кеша';
       else if (lastError.startsWith('Нет связи с сервером') || lastError.startsWith('Связь:')) lastError = '';
-      if (changed) { activeKey = ''; schedulePlayback(); }
+      if (changed || reconnected) { queue.update(activeItems(), monotonic(), true); activeKey = ''; schedulePlayback(); }
     } catch (error) {
       connectionState.hidden = false;
+      connected = false;
       lastError = `Связь: ${error.message}`;
       if (!manifest) bootDetail.textContent = 'Сервер временно недоступен';
     } finally {
@@ -274,7 +327,10 @@
   }
 
   async function prepareOfflineCache() {
-    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) {
+      offlineStatus = {state: 'unsupported', error: 'Для автономного режима нужен HTTPS и поддержка Service Worker'};
+      return;
+    }
     try {
       const workerUrl = new URL('player-sw.js', location.href);
       const scope = new URL('./', location.href).pathname;
@@ -287,7 +343,9 @@
         ]);
       }
       if (navigator.storage?.persist) await navigator.storage.persist();
+      navigator.serviceWorker.controller?.postMessage({type: 'offline-status'});
     } catch (error) {
+      offlineStatus = {state:'error', error: String(error.message)};
       console.warn('Автономный кеш недоступен:', error);
     }
   }
@@ -297,19 +355,25 @@
   }
 
   async function heartbeat() {
+    if (heartbeatLoading) return;
+    heartbeatLoading = true;
     try {
       const response = await fetch(heartbeatUrl, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
         playerVersion:VERSION,revision:manifest?.revision || 0,currentItem:activeKey,error:lastError,
-        capabilities:{viewport:`${innerWidth}x${innerHeight}`,userAgent:navigator.userAgent,webPlayer:true}
-      })});
+        capabilities:{viewport:`${innerWidth}x${innerHeight}`,userAgent:navigator.userAgent,webPlayer:true,
+          sessionId,sessionStartedAt,sessionUptimeSeconds:Math.floor(monotonic()/1000),offline:offlineStatus}
+      }), signal:AbortSignal.timeout(10000)});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (payload.serverTime) serverOffsetMs = Date.parse(payload.serverTime) - Date.now();
       for (const item of payload.commands || []) {
-        const items = activeItems();
-        if (item.command === 'next' && items.length) { forcedIndex = currentIndex + 1; activeKey=''; schedulePlayback(); }
-        if (item.command === 'previous' && items.length) { forcedIndex = currentIndex - 1; activeKey=''; schedulePlayback(); }
-        if (item.command === 'reload') location.reload();
+        if (handledCommands.has(item.id)) { acknowledge(item.id); continue; }
+        handledCommands.add(item.id);
+        if (handledCommands.size > 100) handledCommands.delete(handledCommands.values().next().value);
+        queue.update(activeItems(), monotonic());
+        if (item.command === 'next') { queue.advance(monotonic()); schedulePlayback(); }
+        if (item.command === 'previous') { queue.advance(monotonic(), -1); schedulePlayback(); }
+        if (item.command === 'reload') { await acknowledge(item.id); location.reload(); return; }
         if (item.command === 'mute') {
           globalMuted = true;
           activeNode?.querySelectorAll('video').forEach((video) => { video.muted = true; });
@@ -335,12 +399,20 @@
         acknowledge(item.id);
       }
     } catch (_) { connectionState.hidden = false; }
+    finally { heartbeatLoading = false; }
   }
 
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { activeKey=''; schedulePlayback(); } });
-  window.addEventListener('online', loadManifest);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { schedulePlayback(); loadManifest(); } });
+  window.addEventListener('pageshow', (event) => { if (event.persisted) resetPlayback(); });
+  window.addEventListener('pagehide', () => {
+    // Best effort: abrupt power-off is still detected by the server's heartbeat timeout.
+    navigator.sendBeacon?.(heartbeatUrl, new Blob([JSON.stringify({closing:true,sessionId})], {type:'application/json'}));
+  });
+  window.addEventListener('online', () => { loadManifest(); heartbeat(); });
+  window.addEventListener('offline', () => { connected = false; connectionState.hidden = false; });
   navigator.serviceWorker?.addEventListener('message', (event) => {
     if (event.data?.type === 'revision-ready') loadManifest();
+    if (event.data?.type === 'offline-status') { offlineStatus = event.data.status; }
   });
   prepareOfflineCache().then(loadManifest).then(schedulePlayback);
   setInterval(loadManifest, 30000);

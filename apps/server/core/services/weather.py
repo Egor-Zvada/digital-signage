@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import httpx
@@ -69,7 +70,16 @@ def fetch_open_meteo(source: WeatherSource) -> dict[str, Any]:
         response.raise_for_status()
         payload = response.json()
 
-    current = payload.get("current", {})
+    current = payload.get("current") if isinstance(payload, dict) else None
+    temperature = current.get("temperature_2m") if isinstance(current, dict) else None
+    if (
+        not isinstance(temperature, int | float)
+        or isinstance(temperature, bool)
+        or not math.isfinite(temperature)
+        or current.get("weather_code") is None
+        or not current.get("time")
+    ):
+        raise ValueError("Погодный сервис вернул неполные данные. Сохранён предыдущий прогноз.")
     code = int(current.get("weather_code", -1))
     return {
         "provider": "open_meteo",

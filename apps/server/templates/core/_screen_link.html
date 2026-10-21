@@ -1,0 +1,8 @@
+{% if screen.player_url %}
+<div class="screen-link{% if compact %} screen-link-compact{% endif %}">
+  <label for="screen-url-{{ screen.id }}">Постоянная ссылка дисплея</label>
+  <input class="field-control" id="screen-url-{{ screen.id }}" readonly value="{{ screen.player_url }}" aria-describedby="copy-status-{{ screen.id }}" autocomplete="off" spellcheck="false">
+  <div class="screen-link-actions"><button class="button secondary" type="button" data-copy-target="screen-url-{{ screen.id }}" data-copy-status="copy-status-{{ screen.id }}">Копировать ссылку</button><a class="button secondary" href="{{ screen.player_url }}" target="_blank" rel="noopener noreferrer">Открыть экран</a></div>
+  <small class="block" id="copy-status-{{ screen.id }}" role="status" aria-live="polite"></small>
+</div>
+{% else %}<small class="block error-text">Ссылка не выпущена для этого экрана.</small>{% endif %}

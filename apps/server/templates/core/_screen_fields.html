@@ -1,0 +1,22 @@
+{{ form.non_field_errors }}
+<h3>Подключение дисплея</h3>
+{% include 'core/_screen_form_field.html' with field=form.name %}
+{% include 'core/_screen_form_field.html' with field=form.enabled %}
+{% include 'core/_screen_form_field.html' with field=form.channel %}
+<h3>Ожидаемое расписание подключений</h3>
+<p class="helptext">Задайте, когда ваша программа на устройстве открывает браузер. Панель отличит плановую паузу от потери связи. При каждом открытии ссылки показ начинается с начала и повторяется по кругу.</p>
+{% include 'core/_screen_form_field.html' with field=form.display_mode %}
+<div class="screen-fields-group" data-screen-modes="interval">
+  {% include 'core/_screen_form_field.html' with field=form.display_interval_minutes %}
+  {% include 'core/_screen_form_field.html' with field=form.display_duration_minutes %}
+  {% include 'core/_screen_form_field.html' with field=form.display_daily_start %}
+  {% include 'core/_screen_form_field.html' with field=form.display_daily_end %}
+</div>
+<div class="screen-fields-group" data-screen-modes="windows">
+  {% include 'core/_screen_form_field.html' with field=form.display_windows %}
+</div>
+<div class="screen-fields-group" data-screen-modes="interval windows">
+  {% include 'core/_screen_form_field.html' with field=form.display_weekdays %}
+</div>
+<h3>Хранение в браузере</h3>
+{% include 'core/_screen_form_field.html' with field=form.offline_enabled %}

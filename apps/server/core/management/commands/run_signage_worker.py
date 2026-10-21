@@ -8,6 +8,7 @@ import mimetypes
 import os
 import socket
 import subprocess
+import tempfile
 import time
 import uuid
 from datetime import timedelta
@@ -21,6 +22,7 @@ from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 
 from core.models import Asset, WeatherSource, WorkerJob
+from core.services.snapshot_proxy import snapshot_proxy
 from core.services.weather import update_weather
 
 
@@ -41,6 +43,8 @@ def ffprobe(path: Path) -> dict:
         "json",
         "-show_format",
         "-show_streams",
+        "-protocol_whitelist",
+        "file,pipe",
         str(path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=True)
@@ -49,11 +53,7 @@ def ffprobe(path: Path) -> dict:
 
 def first_stream(probe: dict, codec_type: str) -> dict | None:
     return next(
-        (
-            stream
-            for stream in probe.get("streams", [])
-            if stream.get("codec_type") == codec_type
-        ),
+        (stream for stream in probe.get("streams", []) if stream.get("codec_type") == codec_type),
         None,
     )
 
@@ -72,21 +72,22 @@ def is_browser_compatible(video: dict, audio: dict | None) -> bool:
 
 
 def needs_browser_rendition(source: Path, video: dict, audio: dict | None) -> bool:
-    return source.suffix.lower() not in {".mp4", ".m4v"} or not is_browser_compatible(
-        video, audio
-    )
+    return source.suffix.lower() not in {".mp4", ".m4v"} or not is_browser_compatible(video, audio)
 
 
 def transcode_for_browser(asset: Asset, source: Path) -> tuple[Path, dict]:
     output_dir = settings.MEDIA_ROOT / "renditions" / asset.id.hex[:2]
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f"{asset.id}.mp4"
+    # Never replace a rendition referenced by a published or cached manifest.
+    output = output_dir / f"{asset.id}-{uuid.uuid4().hex}.mp4"
     temporary = output.with_suffix(".tmp.mp4")
     temporary.unlink(missing_ok=True)
     command = [
         "ffmpeg",
         "-nostdin",
         "-y",
+        "-protocol_whitelist",
+        "file,pipe",
         "-i",
         str(source),
         "-map",
@@ -155,6 +156,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.stdout.write(f"signage worker {worker_id}")
+        self.recover_interrupted_jobs()
         while True:
             self.enqueue_due_weather()
             job = self.claim_job(worker_id)
@@ -164,6 +166,59 @@ class Command(BaseCommand):
                 break
             else:
                 time.sleep(options["poll_seconds"])
+
+    @staticmethod
+    def recover_interrupted_jobs() -> int:
+        """Release work whose process disappeared, preserving live maintenance jobs."""
+        now = timezone.now()
+        stale_before = now - timedelta(hours=5)
+        recovered = 0
+        with transaction.atomic():
+            jobs = WorkerJob.objects.select_for_update(skip_locked=True).filter(
+                status=WorkerJob.Status.RUNNING
+            )
+            for job in jobs:
+                owner = job.locked_by.rsplit(":", 2)
+                interrupted = False
+                if len(owner) == 3 and owner[0] == socket.gethostname():
+                    try:
+                        pid = int(owner[1])
+                        if pid <= 0:
+                            raise ValueError("Invalid worker PID")
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        interrupted = True
+                    except (ValueError, PermissionError):
+                        pass
+                if not interrupted and job.locked_at and job.locked_at > stale_before:
+                    continue
+                job.locked_at = None
+                job.locked_by = ""
+                job.error = "Обработка прервана перезапуском фонового процесса."
+                if job.attempts < 3:
+                    job.status = WorkerJob.Status.QUEUED
+                    job.run_after = now
+                    job.finished_at = None
+                else:
+                    job.status = WorkerJob.Status.FAILED
+                    job.finished_at = now
+                    asset_id = job.payload.get("assetId")
+                    if asset_id:
+                        Asset.objects.filter(pk=asset_id).update(
+                            status=Asset.Status.FAILED, error_message=job.error
+                        )
+                job.save(
+                    update_fields=[
+                        "status",
+                        "run_after",
+                        "finished_at",
+                        "locked_at",
+                        "locked_by",
+                        "error",
+                    ]
+                )
+                recovered += 1
+        return recovered
 
     @staticmethod
     def claim_job(worker_id: str) -> WorkerJob | None:
@@ -225,7 +280,9 @@ class Command(BaseCommand):
         job.status = WorkerJob.Status.DONE
         job.finished_at = timezone.now()
         job.error = ""
-        job.save(update_fields=["status", "finished_at", "error"])
+        job.locked_at = None
+        job.locked_by = ""
+        job.save(update_fields=["status", "finished_at", "error", "locked_at", "locked_by"])
 
     def probe_asset(self, asset: Asset) -> None:
         if asset.kind == Asset.Kind.WEBSITE:
@@ -294,9 +351,7 @@ class Command(BaseCommand):
                     "width": asset.width,
                     "height": asset.height,
                     "videoCodec": playback_video.get("codec_name", ""),
-                    "audioCodec": playback_audio.get("codec_name", "")
-                    if playback_audio
-                    else "",
+                    "audioCodec": playback_audio.get("codec_name", "") if playback_audio else "",
                     "transcoded": transcoded,
                 },
             }
@@ -325,31 +380,54 @@ class Command(BaseCommand):
         assert_public_http_url(asset.source_url)
         output_dir = settings.SIGNAGE_SITE_SNAPSHOT_ROOT
         output_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{asset.id}.png"
+        # Published revisions and offline clients may still need earlier captures.
+        filename = f"{asset.id}-{uuid.uuid4().hex}.png"
         output = output_dir / filename
-        command = [
-            "chromium",
-            "--headless=new",
-            "--no-sandbox",
-            "--disable-gpu",
-            "--hide-scrollbars",
-            "--disable-dev-shm-usage",
-            "--window-size=1920,1080",
-            "--run-all-compositor-stages-before-draw",
-            "--virtual-time-budget=10000",
-            f"--screenshot={output}",
-            asset.source_url,
-        ]
-        subprocess.run(command, capture_output=True, text=True, timeout=45, check=True)
-        if not output.is_file() or output.stat().st_size < 1000:
-            raise ValueError("Chromium не создал снимок страницы")
+        temporary = output_dir / f".{asset.id}-{uuid.uuid4().hex}.png"
+        try:
+            with (
+                tempfile.TemporaryDirectory(prefix="signage-snapshot-") as profile,
+                snapshot_proxy() as proxy,
+            ):
+                command = [
+                    "chromium",
+                    "--headless=new",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--hide-scrollbars",
+                    "--disable-dev-shm-usage",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-sync",
+                    "--disable-quic",
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    f"--proxy-server={proxy}",
+                    "--proxy-bypass-list=<-loopback>",
+                    "--no-first-run",
+                    f"--user-data-dir={profile}",
+                    "--window-size=1920,1080",
+                    "--run-all-compositor-stages-before-draw",
+                    "--virtual-time-budget=10000",
+                    f"--screenshot={temporary}",
+                    asset.source_url,
+                ]
+                subprocess.run(command, capture_output=True, text=True, timeout=45, check=True)
+            if not temporary.is_file() or temporary.stat().st_size < 1000:
+                raise ValueError("Chromium не создал снимок страницы")
+            with Image.open(temporary) as image:
+                image.verify()
+            os.replace(temporary, output)
+        finally:
+            temporary.unlink(missing_ok=True)
         metadata = dict(asset.metadata)
         metadata["snapshotPath"] = filename
         metadata["snapshotAt"] = timezone.now().isoformat()
+        metadata["snapshotSha256"] = sha256_file(output)
+        metadata["snapshotSize"] = output.stat().st_size
         asset.metadata = metadata
         asset.mime_type = "image/png"
-        asset.file_size = output.stat().st_size
-        asset.sha256 = sha256_file(output)
+        asset.file_size = metadata["snapshotSize"]
+        asset.sha256 = metadata["snapshotSha256"]
         asset.width = 1920
         asset.height = 1080
         asset.status = Asset.Status.READY

@@ -25,19 +25,20 @@ def serialize_schedule(item: PlaylistItem) -> dict[str, Any]:
 
 def serialize_asset(asset: Asset) -> dict[str, Any]:
     playback = asset.metadata.get("playback", {}) if asset.kind == Asset.Kind.VIDEO else {}
+    snapshot = asset.kind == Asset.Kind.WEBSITE and asset.website_mode == Asset.WebsiteMode.SNAPSHOT
     return {
         "id": str(asset.id),
         "kind": asset.kind,
         "name": asset.name,
         "mimeType": playback.get("mimeType") or asset.mime_type,
-        "sha256": playback.get("sha256") or asset.sha256,
-        "size": playback.get("fileSize") or asset.file_size,
+        "sha256": asset.metadata.get("snapshotSha256", "") if snapshot else playback.get("sha256") or asset.sha256,
+        "size": asset.metadata.get("snapshotSize", 0) if snapshot else playback.get("fileSize") or asset.file_size,
         "durationMs": playback.get("durationMs") or asset.duration_ms,
         "width": playback.get("width") or asset.width,
         "height": playback.get("height") or asset.height,
         "url": asset.source_url if asset.kind == Asset.Kind.WEBSITE else None,
         "websiteMode": asset.website_mode,
-        "mediaPath": playback.get("path") or (asset.file.name if asset.file else None),
+        "mediaPath": asset.metadata.get("snapshotPath") if snapshot else playback.get("path") or (asset.file.name if asset.file else None),
         "metadata": {"playback": playback} if playback else {},
     }
 
@@ -94,6 +95,8 @@ def serialize_scene(scene: Scene, channel: Channel) -> dict[str, Any]:
 
 
 def build_manifest(channel: Channel, revision_number: int) -> dict[str, Any]:
+    if not channel.enabled or not channel.playlist.enabled:
+        raise PublicationError("Канал или его плейлист выключен")
     items: list[dict[str, Any]] = []
     problems: list[str] = []
 

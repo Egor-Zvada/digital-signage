@@ -11,7 +11,7 @@ def get_screen_or_404(screen_id, token: str) -> Screen:
     try:
         screen = Screen.objects.select_related(
             "channel", "channel__published_revision", "sync_group"
-        ).get(pk=screen_id, enabled=True)
+        ).get(pk=screen_id, enabled=True, channel__enabled=True)
     except Screen.DoesNotExist as exc:
         raise Http404 from exc
     if not screen.verify_token(token):

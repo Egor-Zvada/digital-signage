@@ -100,21 +100,21 @@ class Command(BaseCommand):
                 "settings": {"name": "Круг движения", "canvas": "1920x1080"},
             },
         )
-        BrandTheme.objects.exclude(pk=theme.pk).update(is_default=False)
-
-        slogan_set, _ = SloganSet.objects.get_or_create(
+        slogan_set, slogan_set_created = SloganSet.objects.get_or_create(
             name="Основные фразы",
             defaults={
                 "playback_mode": SloganSet.PlaybackMode.SEQUENTIAL,
                 "default_duration_seconds": 10,
             },
         )
-        for index, text in enumerate(SLOGANS, start=1):
-            Slogan.objects.get_or_create(
-                slogan_set=slogan_set,
-                text=text,
-                defaults={"enabled": True, "position": index * 10},
-            )
+        if slogan_set_created:
+            for index, text in enumerate(SLOGANS, start=1):
+                Slogan.objects.create(
+                    slogan_set=slogan_set,
+                    text=text,
+                    enabled=True,
+                    position=index * 10,
+                )
 
         weather, _ = WeatherSource.objects.get_or_create(
             name="Южно-Сахалинск",
@@ -128,44 +128,48 @@ class Command(BaseCommand):
                 "stale_after_minutes": 180,
             },
         )
-        if not WorkerJob.objects.filter(
-            job_type=WorkerJob.JobType.WEATHER,
-            status__in=[WorkerJob.Status.QUEUED, WorkerJob.Status.RUNNING],
-            payload__sourceId=weather.id,
-        ).exists():
+        if (
+            weather.enabled
+            and not WorkerJob.objects.filter(
+                job_type=WorkerJob.JobType.WEATHER,
+                status__in=[WorkerJob.Status.QUEUED, WorkerJob.Status.RUNNING],
+                payload__sourceId=weather.id,
+            ).exists()
+        ):
             WorkerJob.objects.create(
                 job_type=WorkerJob.JobType.WEATHER,
                 payload={"sourceId": weather.id},
             )
 
-        playlist, _ = Playlist.objects.get_or_create(
+        playlist, playlist_created = Playlist.objects.get_or_create(
             name="Основной экран",
             defaults={"description": "Фирменные сцены, объявления и медиаконтент"},
         )
-        for index, (name, scene_type, duration, config) in enumerate(SCENES, start=1):
-            scene, _ = Scene.objects.get_or_create(
-                name=name,
-                defaults={
-                    "scene_type": scene_type,
-                    "enabled": True,
-                    "theme": theme,
-                    "slogan_set": slogan_set,
-                    "weather_source": weather,
-                    "config": config,
-                },
-            )
-            PlaylistItem.objects.get_or_create(
-                playlist=playlist,
-                scene=scene,
-                defaults={
-                    "item_type": PlaylistItem.ItemType.SCENE,
-                    "asset": None,
-                    "title": name,
-                    "enabled": True,
-                    "position": index * 10,
-                    "duration_seconds": duration,
-                },
-            )
+        if playlist_created:
+            for index, (name, scene_type, duration, config) in enumerate(SCENES, start=1):
+                scene, _ = Scene.objects.get_or_create(
+                    name=name,
+                    defaults={
+                        "scene_type": scene_type,
+                        "enabled": True,
+                        "theme": theme,
+                        "slogan_set": slogan_set,
+                        "weather_source": weather,
+                        "config": config,
+                    },
+                )
+                PlaylistItem.objects.get_or_create(
+                    playlist=playlist,
+                    scene=scene,
+                    defaults={
+                        "item_type": PlaylistItem.ItemType.SCENE,
+                        "asset": None,
+                        "title": name,
+                        "enabled": True,
+                        "position": index * 10,
+                        "duration_seconds": duration,
+                    },
+                )
 
         sync_group, _ = SyncGroup.objects.get_or_create(name="Основная группа")
         channel, _ = Channel.objects.get_or_create(

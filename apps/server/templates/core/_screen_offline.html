@@ -1,0 +1,16 @@
+{% if not screen.settings.offlineEnabled %}
+  <span class="badge">По сети</span><small class="block">Полный плейлист не сохраняется</small>
+{% else %}
+  {% with offline=screen.capabilities.offline %}
+    {% if offline.state == 'ready' %}<span class="badge online">Готов к работе без сети</span>
+    {% elif offline.state == 'downloading' %}<span class="badge">Сохраняет контент</span>
+    {% elif offline.state == 'error' %}<span class="badge error">Кеш не готов</span>
+    {% elif offline.state == 'unsupported' %}<span class="badge error">Кеш недоступен</span>
+    {% elif offline.state == 'partial' %}<span class="badge">Частично готов</span>
+    {% elif offline.state == 'disabled' %}<span class="badge">Ожидает включения</span>
+    {% else %}<span class="badge">Ожидает подготовки</span>{% endif %}
+    {% if offline.total %}<small class="block">Файлы: {{ offline.completed|default:0 }} / {{ offline.total }}{% if offline.bytes %} · {{ offline.bytes|filesizeformat }}{% endif %}</small>{% endif %}
+    {% if offline.revision %}<small class="block">Сохранена ревизия {{ offline.revision }}</small>{% endif %}
+    {% if offline.error %}<small class="block error-text">{{ offline.error|truncatechars:120 }}</small>{% endif %}
+  {% endwith %}
+{% endif %}

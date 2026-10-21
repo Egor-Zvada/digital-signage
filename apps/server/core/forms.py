@@ -3,8 +3,11 @@ from __future__ import annotations
 import copy
 import math
 import mimetypes
+import re
+from datetime import time
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django import forms
 from django.contrib.auth import get_user_model
@@ -36,6 +39,13 @@ class StyledModelForm(forms.ModelForm):
         for field in self.fields.values():
             current = field.widget.attrs.get("class", "")
             field.widget.attrs["class"] = f"field-control {current}".strip()
+
+
+def _validate_date_range(form, cleaned):
+    start = cleaned.get("active_from")
+    end = cleaned.get("active_until")
+    if start and end and end <= start:
+        form.add_error("active_until", "Окончание показа должно быть позже его начала.")
 
 
 class AssetForm(StyledModelForm):
@@ -164,7 +174,12 @@ class AssetEditForm(StyledModelForm):
         value = self.cleaned_data.get("source_url", "")
         if self.instance.kind == Asset.Kind.WEBSITE and not value:
             raise forms.ValidationError("Укажите адрес сайта.")
+        if value and urlparse(value).scheme not in {"http", "https"}:
+            raise forms.ValidationError("Разрешены только HTTP и HTTPS адреса.")
         return value
+
+    def clean_website_mode(self):
+        return self.cleaned_data.get("website_mode") or Asset.WebsiteMode.LIVE
 
 
 class PlaylistForm(StyledModelForm):
@@ -287,6 +302,7 @@ class PlaylistItemForm(StyledModelForm):
             cleaned["active_from"] = timezone.now()
         if not cleaned.get("weekdays"):
             cleaned["weekdays"] = []
+        _validate_date_range(self, cleaned)
         return cleaned
 
 
@@ -306,11 +322,161 @@ class ChannelForm(StyledModelForm):
             "muted",
         ]
 
+    def clean_timezone_name(self):
+        value = self.cleaned_data["timezone_name"].strip()
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise forms.ValidationError(
+                "Укажите существующий часовой пояс, например Asia/Sakhalin."
+            ) from exc
+        return value
+
 
 class ScreenForm(StyledModelForm):
+    offline_enabled = forms.BooleanField(
+        label="Автономный показ",
+        required=False,
+        initial=False,
+        help_text=(
+            "Браузер последовательно сохраняет весь плейлист, включая видео, "
+            "для показа без сети. Отключите для воспроизведения по сети без полной загрузки."
+        ),
+    )
+    display_mode = forms.ChoiceField(
+        label="Когда показывать плейлист",
+        required=False,
+        choices=[
+            ("always", "Постоянно"),
+            ("interval", "Повторять через заданный интервал"),
+            ("windows", "В указанные промежутки времени"),
+        ],
+        initial="always",
+    )
+    display_interval_minutes = forms.IntegerField(
+        label="Интервал запуска, минут", required=False, min_value=5, max_value=1440,
+        initial=60,
+        help_text="Например, 60 — запускать показ каждый час от начала рабочего времени.",
+    )
+    display_duration_minutes = forms.IntegerField(
+        label="Продолжительность запуска, минут", required=False, min_value=1, max_value=1440,
+        initial=10,
+        help_text=(
+            "Ожидаемая продолжительность одного подключения. "
+            "Закрытие браузера выполняет ваша программа на Pi."
+        ),
+    )
+    display_daily_start = forms.TimeField(
+        label="Рабочее время с", required=False, initial=time(9, 0),
+        widget=forms.TimeInput(format="%H:%M", attrs={"type": "time"}),
+    )
+    display_daily_end = forms.TimeField(
+        label="Рабочее время до", required=False, initial=time(18, 0),
+        widget=forms.TimeInput(format="%H:%M", attrs={"type": "time"}),
+    )
+    display_weekdays = forms.MultipleChoiceField(
+        label="Дни показа", required=False, choices=WEEKDAY_CHOICES,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="Ничего не выбрано — каждый день. Время берётся из часового пояса канала.",
+    )
+    display_windows = forms.CharField(
+        label="Промежутки показа", required=False, max_length=1000,
+        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "09:00-09:10\n12:00-12:15"}),
+        help_text="Один промежуток HH:MM-HH:MM на строку, например 09:00-09:10. До 32 промежутков.",
+    )
+
     class Meta:
         model = Screen
-        fields = ["name", "enabled", "channel", "sync_group"]
+        fields = ["name", "enabled", "channel"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        config = self.instance.settings if isinstance(self.instance.settings, dict) else {}
+        schedule = config.get("displaySchedule", {})
+        schedule = schedule if isinstance(schedule, dict) else {}
+        self.initial.setdefault("offline_enabled", config.get("offlineEnabled", False))
+        for field, key, default in (
+            ("display_mode", "mode", "always"),
+            ("display_interval_minutes", "intervalMinutes", 60),
+            ("display_duration_minutes", "durationMinutes", 10),
+            ("display_daily_start", "dailyStart", "09:00"),
+            ("display_daily_end", "dailyEnd", "18:00"),
+            ("display_weekdays", "weekdays", []),
+        ):
+            self.initial.setdefault(field, schedule.get(key, default))
+        windows = schedule.get("windows", [])
+        self.initial.setdefault(
+            "display_windows",
+            "\n".join(
+                f"{window.get('start', '')}-{window.get('end', '')}"
+                for window in windows if isinstance(window, dict)
+            ) if isinstance(windows, list) else "",
+        )
+
+    def clean(self):
+        cleaned = super().clean()
+        # Earlier clients submit only the original screen fields.
+        if not cleaned.get("display_mode") and not self.data.get("display_mode"):
+            cleaned["display_mode"] = "always"
+        interval = cleaned.get("display_interval_minutes") or 60
+        duration = cleaned.get("display_duration_minutes") or 10
+        if cleaned.get("display_mode") == "interval" and duration > interval:
+            self.add_error(
+                "display_duration_minutes",
+                "Продолжительность показа не может превышать интервал запуска.",
+            )
+        self._display_windows = []
+        if cleaned.get("display_mode") == "windows":
+            lines = [line.strip() for line in cleaned.get("display_windows", "").splitlines() if line.strip()]
+            if not lines or len(lines) > 32:
+                self.add_error("display_windows", "Укажите от 1 до 32 промежутков показа.")
+            spans = []
+            for line in lines:
+                match = re.fullmatch(r"([0-2]\d:[0-5]\d)\s*-\s*([0-2]\d:[0-5]\d)", line)
+                if not match:
+                    self.add_error("display_windows", f"Некорректный промежуток: {line}. Используйте HH:MM-HH:MM.")
+                    continue
+                start, end = match.groups()
+                try:
+                    start_value, end_value = time.fromisoformat(start), time.fromisoformat(end)
+                except ValueError:
+                    self.add_error("display_windows", f"Некорректное время: {line}.")
+                    continue
+                if start_value == end_value:
+                    self.add_error("display_windows", "Начало и окончание промежутка должны различаться.")
+                    continue
+                start_minute = start_value.hour * 60 + start_value.minute
+                end_minute = end_value.hour * 60 + end_value.minute
+                if end_minute < start_minute:
+                    spans.extend([(start_minute, 1440), (0, end_minute)])
+                else:
+                    spans.append((start_minute, end_minute))
+                self._display_windows.append({"start": start, "end": end})
+            spans.sort()
+            if any(start < previous_end for (_, previous_end), (start, _) in zip(spans, spans[1:], strict=False)):
+                self.add_error("display_windows", "Промежутки показа не должны пересекаться.")
+        return cleaned
+
+    def save(self, commit=True):
+        screen = super().save(commit=False)
+        existing = screen.settings if isinstance(screen.settings, dict) else {}
+        screen.settings = {
+            **existing,
+            "offlineEnabled": self.cleaned_data["offline_enabled"],
+            "displaySchedule": {
+                "mode": self.cleaned_data["display_mode"],
+                "intervalMinutes": self.cleaned_data.get("display_interval_minutes") or 60,
+                "durationMinutes": self.cleaned_data.get("display_duration_minutes") or 10,
+                "dailyStart": (self.cleaned_data.get("display_daily_start") or time(9, 0)).strftime("%H:%M"),
+                "dailyEnd": (self.cleaned_data.get("display_daily_end") or time(18, 0)).strftime("%H:%M"),
+                "weekdays": [int(day) for day in self.cleaned_data.get("display_weekdays", [])],
+                "windows": self._display_windows,
+            },
+        }
+        if commit:
+            screen.save()
+            self.save_m2m()
+        return screen
 
 
 class SceneForm(StyledModelForm):
@@ -507,11 +673,13 @@ class UserUpdateForm(forms.ModelForm):
                 )
 
         current_role = get_user_role(self.instance)
-        if current_role == Role.ADMIN and (role != Role.ADMIN or not is_active):
+        if self.instance.is_active and current_role == Role.ADMIN and (
+            role != Role.ADMIN or not is_active
+        ):
             active_admins = User.objects.filter(is_active=True).filter(
                 Q(is_superuser=True) | Q(groups__name="signage_admin")
-            ).distinct()
-            if active_admins.count() <= 1:
+            ).exclude(pk=self.instance.pk)
+            if not active_admins.exists():
                 raise forms.ValidationError("Нельзя отключить или понизить последнего администратора.")
 
         password1 = cleaned.get("password1", "")
@@ -561,6 +729,15 @@ class SloganForm(StyledModelForm):
         ]
         widgets = {
             "text": forms.Textarea(attrs={"rows": 3}),
-            "active_from": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "active_until": forms.DateTimeInput(attrs={"type": "datetime-local"}),
+            "active_from": forms.DateTimeInput(
+                format="%Y-%m-%dT%H:%M", attrs={"type": "datetime-local"}
+            ),
+            "active_until": forms.DateTimeInput(
+                format="%Y-%m-%dT%H:%M", attrs={"type": "datetime-local"}
+            ),
         }
+
+    def clean(self):
+        cleaned = super().clean()
+        _validate_date_range(self, cleaned)
+        return cleaned

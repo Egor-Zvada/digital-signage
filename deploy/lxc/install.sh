@@ -65,7 +65,7 @@ fi
 
 tls_dir=/etc/signage/tls
 install -d -o root -g www-data -m 0750 "$tls_dir"
-if [[ ! -f "$tls_dir/ca.crt" || ! -f "$tls_dir/server.crt" ]]; then
+if [[ ! -e "$tls_dir/ca.crt" && ! -e "$tls_dir/server.crt" && ! -e "$tls_dir/server.key" && ${SIGNAGE_GENERATE_LOCAL_CA:-false} == true ]]; then
     openssl genpkey -algorithm ED25519 -out "$tls_dir/ca.key"
     openssl req -x509 -new -key "$tls_dir/ca.key" -sha256 -days 3650 \
         -subj "/CN=VVE Signage Local CA" -out "$tls_dir/ca.crt"
@@ -80,6 +80,25 @@ if [[ ! -f "$tls_dir/ca.crt" || ! -f "$tls_dir/server.crt" ]]; then
     chmod 0644 "$tls_dir/ca.crt" "$tls_dir/server.crt"
     chown root:www-data "$tls_dir/server.key"
 fi
+for tls_file in ca.crt server.crt server.key; do
+    if [[ ! -s "$tls_dir/$tls_file" ]]; then
+        echo "Отсутствует $tls_dir/$tls_file. Установите сертификат сервера, закрытый ключ и цепочку доверенного CA. Существующие TLS-файлы не изменены." >&2
+        echo "Создание отдельного локального CA допускается только явно: SIGNAGE_GENERATE_LOCAL_CA=true (если TLS-файлов ещё нет)." >&2
+        exit 1
+    fi
+done
+openssl x509 -in "$tls_dir/server.crt" -checkend 0 -noout
+openssl pkey -in "$tls_dir/server.key" -check -noout
+certificate_public_key=$(openssl x509 -in "$tls_dir/server.crt" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256)
+private_public_key=$(openssl pkey -in "$tls_dir/server.key" -pubout -outform DER | openssl dgst -sha256)
+if [[ $certificate_public_key != "$private_public_key" ]]; then
+    echo "Сертификат сервера не соответствует закрытому ключу. TLS-файлы не изменены." >&2
+    exit 1
+fi
+openssl verify -CAfile "$tls_dir/ca.crt" -untrusted "$tls_dir/server.crt" \
+    -verify_hostname signage.vve.local "$tls_dir/server.crt"
+chown root:www-data "$tls_dir/server.key"
+chmod 0640 "$tls_dir/server.key"
 
 if [[ ! -d "$repo_dir" ]]; then
     git clone --mirror "$repo_url" "$repo_dir"
@@ -102,6 +121,21 @@ set -a
 source "$environment_file"
 set +a
 runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
+    "$release_dir/apps/server/manage.py" check --deploy --fail-level ERROR
+
+# Keep a database restore point before applying any schema/data migration.
+backup_path="/srv/signage/backups/postgres/pre-deploy-${release_id}.dump"
+umask 077
+if ! runuser -u postgres -- pg_dump --format=custom --no-owner signage >"${backup_path}.partial"; then
+    rm -f -- "${backup_path}.partial"
+    echo "Не удалось создать резервную копию базы. Обновление остановлено до миграций." >&2
+    exit 1
+fi
+mv -T -- "${backup_path}.partial" "$backup_path"
+chown signage:signage "$backup_path"
+chmod 0600 "$backup_path"
+echo "Резервная копия базы перед обновлением: $backup_path"
+runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" migrate --noinput
 runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" collectstatic --noinput
@@ -110,9 +144,6 @@ find /srv/signage/static -type d -exec chmod 2750 {} +
 find /srv/signage/static -type f -exec chmod 0640 {} +
 runuser -u signage --preserve-environment -- "$release_dir/.venv/bin/python" \
     "$release_dir/apps/server/manage.py" seed_signage
-
-ln -sfn "$release_dir" /opt/signage/current.new
-mv -Tf /opt/signage/current.new /opt/signage/current
 
 install -o root -g root -m 0644 "$release_dir/deploy/lxc/signage-web.service" /etc/systemd/system/signage-web.service
 install -o root -g root -m 0644 "$release_dir/deploy/lxc/signage-worker.service" /etc/systemd/system/signage-worker.service
@@ -126,6 +157,23 @@ ln -sfn /etc/nginx/sites-available/signage /etc/nginx/sites-enabled/signage
 rm -f /etc/nginx/sites-enabled/default
 
 nginx -t
+previous_release=$(readlink -f /opt/signage/current || true)
+ln -sfn "$release_dir" /opt/signage/current.new
+mv -Tf /opt/signage/current.new /opt/signage/current
+
+restore_previous_release() {
+    local failure_status=$?
+    trap - ERR
+    if [[ -n "$previous_release" && -d "$previous_release" && "$previous_release" != "$release_dir" ]]; then
+        echo "Ошибка запуска нового релиза. Возвращаю предыдущую версию приложения: $previous_release" >&2
+        ln -sfn "$previous_release" /opt/signage/current.new
+        mv -Tf /opt/signage/current.new /opt/signage/current
+        systemctl restart signage-web.service signage-worker.service nginx || true
+        echo "Миграции автоматически не откатывались. Резервная копия базы: $backup_path" >&2
+    fi
+    exit "${failure_status:-1}"
+}
+trap restore_previous_release ERR
 systemctl daemon-reload
 systemctl enable --now signage-web.service signage-worker.service signage-backup.timer signage-maintenance.timer nginx
 systemctl restart signage-web.service signage-worker.service nginx
@@ -154,11 +202,12 @@ done
 if [[ $health_ok -ne 1 ]]; then
     echo "Веб-сервис не ответил за 30 секунд." >&2
     systemctl --no-pager --full status signage-web nginx >&2 || true
-    exit 1
+    false
 fi
 for static_path in \
     /static/css/admin.css \
     /static/css/player.css \
+    /static/js/playback-core.js \
     /static/js/player.js \
     /static/brand/school-logo.png; do
     if ! curl --fail --silent --show-error --output /dev/null \
@@ -166,9 +215,10 @@ for static_path in \
         --resolve signage.vve.local:443:127.0.0.1 \
         "https://signage.vve.local${static_path}"; then
         echo "Статический ресурс недоступен: ${static_path}" >&2
-        exit 1
+        false
     fi
 done
+trap - ERR
 echo
 echo "Digital Signage установлен: https://signage.vve.local/"
 echo "Корневой сертификат: http://signage.vve.local/signage-ca.crt"

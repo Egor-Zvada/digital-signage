@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import json
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import PurePosixPath
 
@@ -40,10 +43,12 @@ from .models import (
     Screen,
     Slogan,
     SloganSet,
+    WeatherSource,
     WorkerJob,
 )
 from .permissions import ROLE_LABELS, Role, get_user_role, role_at_least, role_required
 from .player_auth import screen_token_required
+from .services.display_schedule import annotate_screen
 from .services.manifest import PublicationError, publish_channel
 from .services.system_status import collect_system_status
 from .wiki_content import WIKI_ARTICLES, WIKI_BY_SLUG
@@ -80,8 +85,13 @@ AUDIT_LABELS = {
 
 
 def _client_ip(request: HttpRequest) -> str | None:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    return (forwarded.split(",")[0].strip() or request.META.get("REMOTE_ADDR"))[:45]
+    # Nginx overwrites X-Real-IP; the incoming X-Forwarded-For can contain arbitrary text.
+    for candidate in (request.headers.get("X-Real-IP"), request.META.get("REMOTE_ADDR")):
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 def _audit(request: HttpRequest, action: str, obj=None, details=None) -> None:
@@ -116,8 +126,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         "playlists_count": Playlist.objects.count(),
         "channels_count": Channel.objects.count(),
         "screens_count": Screen.objects.count(),
-        "screens_online": Screen.objects.filter(last_seen_at__gte=online_after).count(),
-        "screens": Screen.objects.select_related("channel").order_by("name")[:10],
+        "screens_online": Screen.objects.filter(last_seen_at__gte=online_after, enabled=True, channel__enabled=True).exclude(status=Screen.Status.OFFLINE).count(),
+        "screens": [annotate_screen(screen, now) for screen in Screen.objects.select_related("channel").order_by("name")[:10]],
         "recent_events": recent_events,
         "operational_access": operational_access,
         "system": collect_system_status() if operational_access else None,
@@ -378,23 +388,27 @@ def channel_publish(request: HttpRequest, channel_id: int) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def screen_list(request: HttpRequest) -> HttpResponse:
     form = ScreenForm(request.POST or None)
-    issued_url = request.session.pop("issued_screen_url", None)
     if request.method == "POST" and form.is_valid():
         screen = form.save(commit=False)
-        token = screen.issue_token()
+        screen.issue_token()
         screen.save()
-        issued_url = request.build_absolute_uri(
-            reverse("player", kwargs={"screen_id": screen.id, "token": token})
-        )
-        request.session["issued_screen_url"] = issued_url
         _audit(request, "screen.created", screen)
+        messages.success(request, "Экран создан. Его постоянную ссылку можно скопировать в любое время.")
         return redirect("screens")
     screens = Screen.objects.select_related("channel", "sync_group").order_by("name")
-    return render(
+    for screen in screens:
+        annotate_screen(screen)
+        screen.player_url = request.build_absolute_uri(
+            reverse("player", kwargs={"screen_id": screen.id, "token": screen.get_link_token()})
+        ) if screen.token_hash else ""
+    response = render(
         request,
         "core/screens.html",
-        {"screens": screens, "form": form, "issued_url": issued_url},
+        {"screens": screens, "form": form},
     )
+    response["Cache-Control"] = "private, no-store"
+    response["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @role_required(Role.MODERATOR)
@@ -407,9 +421,15 @@ def screen_edit(request: HttpRequest, screen_id) -> HttpResponse:
         _audit(request, "screen.updated", screen)
         messages.success(request, "Экран изменён. Его постоянная ссылка осталась прежней.")
         return redirect("screens")
-    return render(
-        request, "core/edit_form.html", {"form": form, "object": screen, "kind": "Экран"}
+    screen.player_url = request.build_absolute_uri(
+        reverse("player", kwargs={"screen_id": screen.id, "token": screen.get_link_token()})
+    ) if screen.token_hash else ""
+    response = render(
+        request, "core/screen_edit.html", {"form": form, "object": screen, "screen": screen}
     )
+    response["Cache-Control"] = "private, no-store"
+    response["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @role_required(Role.MODERATOR)
@@ -694,22 +714,14 @@ def player_manifest(request: HttpRequest, screen_id, token: str) -> JsonResponse
     screen = request.signage_screen
     revision = screen.channel.published_revision
     if not revision:
-        return JsonResponse(
-            {
+        payload = {
                 "schemaVersion": 1,
                 "revision": 0,
-                "serverTime": timezone.now().isoformat(),
-                "screen": {"id": str(screen.id), "name": screen.name},
+                "channel": {"id": screen.channel_id, "timezone": screen.channel.timezone_name, "defaultVolume": 100},
                 "items": [],
             }
-        )
-    etag = f'"channel-{screen.channel_id}-revision-{revision.number}"'
-    if request.headers.get("If-None-Match") == etag:
-        response = HttpResponse(status=304)
-        response.headers["ETag"] = etag
-        return response
-    payload = dict(revision.manifest)
-    payload["items"] = [dict(item) for item in revision.manifest.get("items", [])]
+    else:
+        payload = deepcopy(revision.manifest)
     for item in payload["items"]:
         asset = item.get("asset")
         if not asset:
@@ -720,13 +732,25 @@ def player_manifest(request: HttpRequest, screen_id, token: str) -> JsonResponse
             asset["mediaUrl"] = reverse(
                 "player_media",
                 kwargs={"screen_id": screen.id, "token": token, "asset_id": asset["id"]},
-            )
+            ) + f"?revision={revision.number}"
         elif asset.get("websiteMode") == Asset.WebsiteMode.SNAPSHOT:
             asset["mediaUrl"] = reverse(
                 "player_media",
                 kwargs={"screen_id": screen.id, "token": token, "asset_id": asset["id"]},
-            )
-    payload["serverTime"] = timezone.now().isoformat()
+            ) + f"?revision={revision.number}"
+    # Weather is live data, separate from the immutable published content revision.
+    sources = {source.pk: source for source in WeatherSource.objects.filter(enabled=True)}
+    def fresh_weather(data, source_id):
+        source = sources.get(source_id)
+        if source:
+            data.update(data=source.current_data, updatedAt=source.last_success_at.isoformat() if source.last_success_at else None,
+                        staleAfterMinutes=source.stale_after_minutes)
+    if screen.channel.weather_source_id:
+        fresh_weather(payload.setdefault("weather", {}), screen.channel.weather_source_id)
+    for item in payload["items"]:
+        weather = item.get("scene", {}).get("weather")
+        if weather:
+            fresh_weather(weather, weather.get("sourceId"))
     payload["screen"] = {
         "id": str(screen.id),
         "name": screen.name,
@@ -738,7 +762,12 @@ def player_manifest(request: HttpRequest, screen_id, token: str) -> JsonResponse
         ),
         "settings": screen.settings,
     }
-    response = JsonResponse(payload)
+    etag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest() + '"'
+    if request.headers.get("If-None-Match") == etag:
+        response = HttpResponse(status=304)
+    else:
+        payload["serverTime"] = timezone.now().isoformat()
+        response = JsonResponse(payload)
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "no-cache"
     return response
@@ -749,6 +778,14 @@ def player_manifest(request: HttpRequest, screen_id, token: str) -> JsonResponse
 def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpResponse:
     screen = request.signage_screen
     revision = screen.channel.published_revision
+    if "revision" in request.GET:
+        try:
+            revision_number = int(request.GET["revision"])
+            if not 1 <= revision_number <= 2147483647:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise Http404 from None
+        revision = screen.channel.revisions.filter(number=revision_number).first()
     if not revision:
         raise Http404
     published_asset = next(
@@ -764,8 +801,11 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
     # Опубликованная ревизия неизменяема: отключение элемента применяется только
     # после следующей публикации, а текущая ревизия продолжает работать без обрыва.
     asset = get_object_or_404(Asset, pk=asset_id)
-    if asset.kind == Asset.Kind.WEBSITE and asset.website_mode == Asset.WebsiteMode.SNAPSHOT:
-        snapshot_name = asset.metadata.get("snapshotPath", "")
+    if published_asset.get("kind") == Asset.Kind.WEBSITE and published_asset.get("websiteMode") == Asset.WebsiteMode.SNAPSHOT:
+        snapshot_name = published_asset.get("mediaPath") or asset.metadata.get("snapshotPath", "")
+        snapshot_relative = PurePosixPath(str(snapshot_name))
+        if snapshot_relative.is_absolute() or ".." in snapshot_relative.parts or "\\" in str(snapshot_name):
+            raise Http404
         if not snapshot_name:
             raise Http404
         snapshot_path = settings.SIGNAGE_SITE_SNAPSHOT_ROOT / snapshot_name
@@ -774,7 +814,7 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
         return FileResponse(snapshot_path.open("rb"), content_type="image/png")
     media_name = published_asset.get("mediaPath") or (asset.file.name if asset.file else "")
     relative_path = PurePosixPath(str(media_name))
-    if not media_name or relative_path.is_absolute() or ".." in relative_path.parts:
+    if not media_name or relative_path.is_absolute() or ".." in relative_path.parts or "\\" in str(media_name):
         raise Http404
     selected_path = settings.MEDIA_ROOT.joinpath(*relative_path.parts)
     if not selected_path.is_file():
@@ -798,19 +838,41 @@ def player_heartbeat(request: HttpRequest, screen_id, token: str) -> JsonRespons
     screen = request.signage_screen
     try:
         payload = json.loads(request.body or b"{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "invalid_json"}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "invalid_json"}, status=400)
+    if len(request.body) > 65536:
+        return JsonResponse({"error": "payload_too_large"}, status=400)
+    if payload.get("closing") is True:
+        session_id = payload.get("sessionId")
+        capabilities = screen.capabilities if isinstance(screen.capabilities, dict) else {}
+        if not isinstance(session_id, str) or not session_id or capabilities.get("sessionId") != session_id:
+            return JsonResponse({"closed": False})
+        now = timezone.now()
+        capabilities = {**capabilities, "sessionClosedAt": now.isoformat()}
+        # An older page's delayed beacon must not close a replacement session.
+        closed = Screen.objects.filter(pk=screen.pk, capabilities__sessionId=session_id).update(
+            status=Screen.Status.OFFLINE,
+            capabilities=capabilities,
+            last_seen_at=now,
+            last_error="",
+            updated_at=now,
+        )
+        return JsonResponse({"closed": bool(closed)})
+    revision = payload.get("revision")
+    if revision is not None and (type(revision) is not int or not 0 <= revision <= 2147483647):
+        return JsonResponse({"error": "invalid_revision"}, status=400)
     screen.last_seen_at = timezone.now()
     screen.last_ip = _client_ip(request)
     screen.status = Screen.Status.ERROR if payload.get("error") else Screen.Status.ONLINE
     screen.current_item_key = str(payload.get("currentItem", ""))[:160]
-    screen.current_revision = (
-        payload.get("revision") if isinstance(payload.get("revision"), int) else None
-    )
+    screen.current_revision = revision
     screen.player_version = str(payload.get("playerVersion", ""))[:80]
     screen.capabilities = (
         payload.get("capabilities", {}) if isinstance(payload.get("capabilities"), dict) else {}
     )
+    screen.capabilities.pop("sessionClosedAt", None)
     screen.last_error = str(payload.get("error", ""))[:2000]
     screen.save(
         update_fields=[

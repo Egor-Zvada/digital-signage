@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block title %}Изменить экран{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Экран</p><h1>{{ object }}</h1></div><a class="button secondary" href="{% url 'screens' %}">Все экраны</a></header>
+<section class="secret-banner"><strong>Ссылка для браузера дисплея</strong>{% include 'core/_screen_link.html' %}<small>Скопируйте адрес в настройку киоска. Ранее сохранённые ссылки также продолжают работать.</small></section>
+<section class="panel form-panel">
+  <form method="post" class="stack-form edit-form" data-screen-editor>{% csrf_token %}{% include 'core/_screen_fields.html' %}
+    <div><label>Подготовка автономного показа</label>{% include 'core/_screen_offline.html' %}</div>
+    <div class="modal-actions"><a class="button secondary" href="{% url 'screens' %}">Отмена</a><button class="button primary">Сохранить</button></div>
+  </form>
+</section>
+{% endblock %}

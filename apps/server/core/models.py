@@ -5,10 +5,12 @@ import secrets
 import uuid
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from django.utils.text import slugify
 
 User = get_user_model()
@@ -411,11 +413,34 @@ class Screen(TimestampedModel):
         self.token_hash = hashlib.sha256(token.encode()).hexdigest()
         return token
 
+    def get_link_token(self, *, secret: str | None = None) -> str:
+        """Return a repeatably copyable token without storing the legacy secret."""
+        if not self.token_hash:
+            return ""
+        signature = salted_hmac(
+            "signage.screen.link.v1",
+            f"{self.pk}:{self.token_hash}",
+            secret=settings.SECRET_KEY if secret is None else secret,
+            algorithm="sha256",
+        ).hexdigest()
+        return f"link_{signature}"
+
     def verify_token(self, token: str) -> bool:
         if not token or not self.token_hash:
             return False
         candidate = hashlib.sha256(token.encode()).hexdigest()
-        return secrets.compare_digest(candidate, self.token_hash)
+        if secrets.compare_digest(candidate, self.token_hash):
+            return True
+        if (
+            len(token) != 69
+            or not token.startswith("link_")
+            or any(character not in "0123456789abcdef" for character in token[5:])
+        ):
+            return False
+        return any(
+            secrets.compare_digest(token, self.get_link_token(secret=key))
+            for key in [settings.SECRET_KEY, *settings.SECRET_KEY_FALLBACKS]
+        )
 
 
 class PlayerCommand(models.Model):

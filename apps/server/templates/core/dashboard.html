@@ -33,7 +33,7 @@
   <section class="panel">
     <div class="panel-heading"><div><p class="eyebrow">Состояние</p><h2>Последние экраны</h2></div><a href="{% url 'screens' %}">Все экраны</a></div>
     <div class="table-wrap"><table><thead><tr><th>Экран</th><th>Канал</th><th>Состояние</th><th>Последняя связь</th></tr></thead><tbody>
-      {% for screen in screens %}<tr><td><strong>{{ screen.name }}</strong></td><td>{{ screen.channel.name }}</td><td><span class="badge {{ screen.status }}">{{ screen.get_status_display }}</span></td><td>{{ screen.last_seen_at|date:'d.m.Y H:i:s'|default:'—' }}</td></tr>
+      {% for screen in screens %}<tr><td><strong>{{ screen.name }}</strong></td><td>{{ screen.channel.name }}</td><td>{% if not screen.enabled %}<span class="badge">Выключен</span>{% elif screen.is_online %}<span class="badge {{ screen.status }}">{{ screen.get_status_display }}</span>{% elif screen.expected_active == False %}<span class="badge">Плановая пауза</span>{% elif screen.session_closed %}<span class="badge">Окно закрыто</span>{% else %}<span class="badge {{ screen.status }}">{{ screen.get_status_display }}</span>{% endif %}</td><td>{{ screen.last_seen_at|date:'d.m.Y H:i:s'|default:'—' }}</td></tr>
       {% empty %}<tr><td colspan="4" class="empty">Экраны ещё не созданы.</td></tr>{% endfor %}
     </tbody></table></div>
   </section>
