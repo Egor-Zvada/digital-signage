@@ -175,6 +175,8 @@ def test_snapshot_uses_private_profile_and_preserves_published_images(
             next(x.split("=", 1)[1] for x in command if x.startswith("--screenshot="))
         )
         assert profile.is_dir()
+        assert Path(_kwargs["env"]["XDG_CONFIG_HOME"]).parent == profile
+        assert Path(_kwargs["env"]["XDG_CACHE_HOME"]).parent == profile
         assert screenshot != previous
         assert previous.read_bytes() == b"previous snapshot"
         profiles.append(profile)

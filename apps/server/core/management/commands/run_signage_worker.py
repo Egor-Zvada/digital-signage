@@ -411,7 +411,19 @@ class Command(BaseCommand):
                     f"--screenshot={temporary}",
                     asset.source_url,
                 ]
-                subprocess.run(command, capture_output=True, text=True, timeout=45, check=True)
+                # Chromium 155's crash reporter also needs a writable configuration
+                # directory; --user-data-dir alone does not isolate it from HOME.
+                browser_environment = {
+                    **os.environ,
+                    "XDG_CONFIG_HOME": str(Path(profile) / "config"),
+                    "XDG_CACHE_HOME": str(Path(profile) / "cache"),
+                }
+                try:
+                    subprocess.run(command, capture_output=True, text=True, timeout=45,
+                                   check=True, env=browser_environment)
+                except subprocess.CalledProcessError as exc:
+                    detail = (exc.stderr or "").strip()[-2000:]
+                    raise ValueError(f"Chromium не смог создать снимок: {detail or exc.returncode}") from exc
             if not temporary.is_file() or temporary.stat().st_size < 1000:
                 raise ValueError("Chromium не создал снимок страницы")
             with Image.open(temporary) as image:
