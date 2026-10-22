@@ -71,4 +71,3 @@ SHA-256 и состояния Pi-Agent находится в
 [docs/operations.md](docs/operations.md), запуск браузера в режиме экрана — в
 [docs/browser-client.md](docs/browser-client.md), исходный объём первой версии — в
 [docs/product-spec-v1.md](docs/product-spec-v1.md).
-
