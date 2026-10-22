@@ -72,9 +72,3 @@ SHA-256 и состояния Pi-Agent находится в
 [docs/browser-client.md](docs/browser-client.md), исходный объём первой версии — в
 [docs/product-spec-v1.md](docs/product-spec-v1.md).
 
-## Следующая версия в PI-TV-player
-
-[Контракт объединения](docs/unified-platform-integration-contract.md) описывает
-перенос возможностей в одну платформу с тремя рабочими модулями:
-«Контент → Плейлисты → Экраны». Это задание на следующую версию, а не описание
-уже выполненного переноса.

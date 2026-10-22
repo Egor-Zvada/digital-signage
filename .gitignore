@@ -30,3 +30,6 @@ backups/
 .DS_Store
 Thumbs.db
 
+# Local handoff document; intentionally not published.
+/docs/unified-platform-integration-contract.md
+
