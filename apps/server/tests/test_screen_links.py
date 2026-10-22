@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
+
 import pytest
-from core.models import Channel, Screen
+from core.models import Channel, PlayerCommand, Screen
 from core.permissions import Role, set_user_role
 from django.core.management import call_command
 from django.test import Client, override_settings
@@ -84,7 +86,7 @@ def test_screen_list_and_settings_always_show_copyable_url(display, moderator_cl
         assert "Открыть экран" in html
         assert legacy_token not in html
         assert response["Cache-Control"] == "private, no-store"
-        assert response["Referrer-Policy"] == "no-referrer"
+        assert response["Referrer-Policy"] == "same-origin"
     screen.refresh_from_db()
     assert screen.verify_token(legacy_token)
 
@@ -138,3 +140,114 @@ def test_offline_readiness_is_separate_from_network_state_and_escaped(display, m
     assert "Кеш не готов" in html
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+@pytest.fixture
+def strict_https_moderator_client(display, django_user_model, settings):
+    settings.ALLOWED_HOSTS = ["signage.vve.local"]
+    settings.CSRF_COOKIE_HTTPONLY = True
+    user = django_user_model.objects.create_user(username="csrf_screen_moderator")
+    set_user_role(user, Role.MODERATOR)
+    client = Client(enforce_csrf_checks=True, HTTP_HOST="signage.vve.local")
+    client.force_login(user)
+    return client
+
+
+def csrf_from_form(response):
+    token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', response.content.decode())
+    assert token, "The rendered screen form must contain a masked CSRF token"
+    return token[1]
+
+
+@pytest.mark.parametrize("origin_header", [True, False])
+def test_https_screen_edit_post_keeps_csrf_protection_and_saves_form(
+    display, strict_https_moderator_client, origin_header
+):
+    screen, original_token = display
+    client = strict_https_moderator_client
+    path = reverse("screen_edit", args=[screen.pk])
+    form = client.get(path, secure=True)
+    assert form["Referrer-Policy"] == "same-origin"
+    assert client.cookies["csrftoken"]["httponly"]
+    headers = {"HTTP_REFERER": f"https://signage.vve.local{path}"}
+    if origin_header:
+        headers["HTTP_ORIGIN"] = "https://signage.vve.local"
+    response = client.post(
+        path,
+        {
+            "csrfmiddlewaretoken": csrf_from_form(form),
+            "name": "Экран после сохранения HTTPS-формы",
+            "enabled": "on",
+            "channel": screen.channel_id,
+            "display_mode": "always",
+        },
+        secure=True,
+        **headers,
+    )
+    assert response.status_code == 302
+    screen.refresh_from_db()
+    assert screen.name == "Экран после сохранения HTTPS-формы"
+    assert screen.verify_token(original_token)
+
+
+def test_https_screen_command_uses_rendered_csrf_token(strict_https_moderator_client, display):
+    client = strict_https_moderator_client
+    screen, _ = display
+    form = client.get(reverse("screens"), secure=True)
+    assert form["Referrer-Policy"] == "same-origin"
+    response = client.post(
+        reverse("screen_command", args=[screen.pk]),
+        {"csrfmiddlewaretoken": csrf_from_form(form), "command": "next"},
+        secure=True,
+        HTTP_ORIGIN="https://signage.vve.local",
+        HTTP_REFERER="https://signage.vve.local/screens/",
+    )
+    assert response.status_code == 302
+    assert PlayerCommand.objects.filter(screen=screen, command="next").count() == 1
+
+
+def test_https_new_screen_can_be_created_from_screen_list(strict_https_moderator_client, display):
+    client = strict_https_moderator_client
+    existing, _ = display
+    form = client.get(reverse("screens"), secure=True)
+    response = client.post(
+        reverse("screens"),
+        {
+            "csrfmiddlewaretoken": csrf_from_form(form),
+            "name": "Новый HTTPS-дисплей",
+            "enabled": "on",
+            "channel": existing.channel_id,
+            "display_mode": "always",
+        },
+        secure=True,
+        HTTP_ORIGIN="https://signage.vve.local",
+        HTTP_REFERER="https://signage.vve.local/screens/",
+    )
+    assert response.status_code == 302
+    created = Screen.objects.get(name="Новый HTTPS-дисплей")
+    assert created.verify_token(created.get_link_token())
+
+
+@pytest.mark.parametrize(
+    ("token_present", "headers"),
+    [
+        (True, {"HTTP_ORIGIN": "https://foreign.invalid", "HTTP_REFERER": "https://foreign.invalid/"}),
+        (True, {"HTTP_ORIGIN": "null"}),
+        (True, {}),
+        (False, {"HTTP_ORIGIN": "https://signage.vve.local", "HTTP_REFERER": "https://signage.vve.local/screens/"}),
+    ],
+)
+def test_screen_commands_reject_invalid_csrf_and_untrusted_origins(
+    strict_https_moderator_client, display, token_present, headers
+):
+    client = strict_https_moderator_client
+    screen, _ = display
+    form = client.get(reverse("screens"), secure=True)
+    payload = {"command": "next"}
+    if token_present:
+        payload["csrfmiddlewaretoken"] = csrf_from_form(form)
+    response = client.post(
+        reverse("screen_command", args=[screen.pk]), payload, secure=True, **headers
+    )
+    assert response.status_code == 403
+    assert not PlayerCommand.objects.filter(screen=screen).exists()

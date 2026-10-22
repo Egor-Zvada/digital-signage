@@ -89,6 +89,28 @@ def test_previous_revision_media_survives_playlist_republication(protocol):
 
 
 @pytest.mark.django_db
+def test_x_accel_media_response_does_not_advertise_an_unsent_file_body(protocol, settings):
+    client, channel, _screen, paths = protocol
+    asset, _item = add_image(channel)
+    publish_channel(channel)
+    published = next(
+        row["asset"]
+        for row in client.get(paths["player_manifest"]).json()["items"]
+        if row.get("asset", {}).get("id") == str(asset.id)
+    )
+    settings.DEBUG = False
+
+    response = client.get(published["mediaUrl"], HTTP_RANGE="bytes=0-7")
+
+    assert response.status_code == 200
+    assert response["X-Accel-Redirect"] == f"/_protected_media/{asset.file.name}"
+    assert response.content == b""
+    # CommonMiddleware may add zero, but ASGI must never promise unsent file bytes.
+    assert int(response.get("Content-Length", "0")) == len(response.content)
+    assert "immutable" in response["Cache-Control"]
+
+
+@pytest.mark.django_db
 def test_historical_revision_cannot_read_another_channel_asset(protocol):
     client, channel, _screen, paths = protocol
     asset, _ = add_image(channel)

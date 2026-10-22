@@ -407,7 +407,7 @@ def screen_list(request: HttpRequest) -> HttpResponse:
         {"screens": screens, "form": form},
     )
     response["Cache-Control"] = "private, no-store"
-    response["Referrer-Policy"] = "no-referrer"
+    response["Referrer-Policy"] = "same-origin"
     return response
 
 
@@ -428,7 +428,7 @@ def screen_edit(request: HttpRequest, screen_id) -> HttpResponse:
         request, "core/screen_edit.html", {"form": form, "object": screen, "screen": screen}
     )
     response["Cache-Control"] = "private, no-store"
-    response["Referrer-Policy"] = "no-referrer"
+    response["Referrer-Policy"] = "same-origin"
     return response
 
 
@@ -826,8 +826,7 @@ def player_media(request: HttpRequest, screen_id, token: str, asset_id) -> HttpR
     response.headers["X-Accel-Redirect"] = f"/_protected_media/{relative_path.as_posix()}"
     response.headers["Content-Disposition"] = "inline"
     response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
-    if published_asset.get("size"):
-        response.headers["Content-Length"] = str(published_asset["size"])
+    # The ASGI response has no body; Nginx calculates the file's length and ranges.
     return response
 
 
